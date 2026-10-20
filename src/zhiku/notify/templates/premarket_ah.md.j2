@@ -25,6 +25,10 @@
 无
 {% endif %}
 
+{% include "_event.md.j2" %}
+
+{% include "_kol.md.j2" %}
+
 低价值新闻未展开：{{ news.low_value_count }} 条（情绪热度/旧闻翻炒/未交叉验证等只计数）。
 知情人士后续跟踪：确认 {{ news.source_hits.confirmed if news.source_hits else 0 }} / 否认 {{ news.source_hits.denied if news.source_hits else 0 }} / 待定 {{ news.source_hits.pending if news.source_hits else 0 }}。
 
@@ -34,6 +38,8 @@
 - **{{ o.symbol }}** {{ o.name }} {{ o.direction }} 分 {{ o.score }}｜{{ o.source_grade_label or "信源未分级" }}
   - 逻辑：{{ o.entry_logic }}
   - 风险：{{ o.risk }}
+  - 失效：{{ o.invalidation or "缺数据" }}；时间止损 {{ o.time_stop_on or o.time_stop or "缺数据" }}
+  - 预期差 z={{ o.surprise_z if o.surprise_z is not none else "缺数据" }}；新颖度 {{ o.novelty if o.novelty is not none else "缺数据" }}；拥挤度 {{ o.crowding if o.crowding is not none else "缺数据" }}
 {% endfor %}
 {% if not news.by_tier.get("质量档") %}
 无

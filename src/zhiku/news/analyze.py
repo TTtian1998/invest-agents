@@ -39,7 +39,11 @@ CATALYST_CN = {
 def is_important(cluster: ClusteredNews) -> bool:
     groups = set(cluster.groups or [])
     tags = set(cluster.tags or [])
-    if (cluster.source_grade or 4) >= 4 or cluster.catalyst == "sentiment_hot":
+    x_cat = cluster.x_category or next((i.x_category for i in cluster.items if i.x_category), "")
+    x_relevant = x_cat in {"institutional", "macro_fed", "newswire"} or cluster.resonance or cluster.newswire_matched
+    if cluster.catalyst == "sentiment_hot" and not x_relevant:
+        return False
+    if (cluster.source_grade or 4) >= 4 and not x_relevant:
         return False
     if "持仓相关" in groups or "宏观" in groups or "地缘" in groups or "硬日历" in groups:
         return True
@@ -219,7 +223,20 @@ def rule_card(
         card.so_what = (
             f"{card.so_what} 【三级审查】立场：{cluster.institution_review.institution_stance}"
             f" 往绩：{cluster.institution_review.track_record}"
+            f" 已知持仓：{cluster.institution_review.known_holdings}"
+            f" 利益关系：{cluster.institution_review.conflicts}"
         )
+    if cluster.resonance:
+        card.so_what = f"{card.so_what} 【共振】多个关注账号观点同向。"
+    if cluster.reverse_risk:
+        card.counter_view = f"{card.counter_view} 【反向风险】情绪极度一致，拥挤交易可能反转。"
+    if cluster.fomc_boost:
+        card.impact = f"{card.impact} 【窗口】macro_fed 帖子处于 FOMC 事件窗口，权重上调。"
+    x_cat = cluster.x_category or next((i.x_category for i in cluster.items if i.x_category), "")
+    if cluster.newswire_matched:
+        card.claims.append(Claim(text="快讯已匹配到一级或二级信源，可标事实。", kind="事实"))
+    elif x_cat == "newswire":
+        card.claims.append(Claim(text="快讯尚未匹配一级/二级信源，不能标事实。", kind="事实"))
     return ensure_claim_kinds(card)
 
 

@@ -116,6 +116,7 @@ def _load_books(paths: Paths):
 
 
 def _apply_macro_windows(paths: Paths, on: date, provider_kind: str, evaluations) -> list[str]:
+    banners: list[str] = []
     try:
         from zhiku.macro.models import EventWindow
         from zhiku.macro.runner import run_macro
@@ -123,9 +124,23 @@ def _apply_macro_windows(paths: Paths, on: date, provider_kind: str, evaluations
 
         bundle = run_macro(paths, on, provider_kind=provider_kind)
         wins = [EventWindow.model_validate(w) for w in bundle.windows]
-        return apply_to_evaluations(evaluations, wins, on)
+        banners.extend(apply_to_evaluations(evaluations, wins, on))
     except Exception:  # noqa: BLE001 — 宏观失败不得阻断触发线
-        return []
+        pass
+    try:
+        from zhiku.events.invalidation import apply_event_discipline, expiry_alerts
+        from zhiku.events.models import Emergency
+        from zhiku.news.runner import run_news
+        from zhiku.pipeline.settings import load_pipeline_settings
+
+        settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
+        news = run_news(paths, on, provider_kind=provider_kind, settings=settings)
+        emergency = Emergency.model_validate(news.emergency or {})
+        expiries = expiry_alerts(paths.journal / "opportunities.jsonl", on)
+        banners.extend(apply_event_discipline(evaluations, emergency=emergency, expiries=expiries))
+    except Exception:  # noqa: BLE001
+        pass
+    return banners
 
 
 @app.command("check")
@@ -239,6 +254,7 @@ def review_cmd(
     result = review_week(events, _provider(ctx), end, rebound_pct=rebound_pct)
     script_hits: list[dict] = []
     source_hits: dict = {}
+    x_hits: dict = {}
     try:
         from zhiku.macro.runner import run_macro
         from zhiku.news.grades import load_followups, source_hitrate
@@ -248,6 +264,7 @@ def review_cmd(
         script_hits = macro.script_hits
         news = run_news(paths, end, provider_kind=ctx.obj["provider_kind"], macro_bundle=macro)
         source_hits = news.source_hits or source_hitrate(load_followups(paths.fixtures / "news.yaml"))
+        x_hits = news.x_hits or {}
     except Exception:  # noqa: BLE001
         pass
     md = render(
@@ -257,6 +274,7 @@ def review_cmd(
         kb=str(paths.kb),
         script_hits=script_hits,
         source_hits=source_hits,
+        x_hits=x_hits,
     )
     out = write_report(paths.reports, result.end, "weekly", md)
     typer.echo(md)

@@ -88,6 +88,7 @@ def test_four_commands_write_markdown(tmp_kb: Path, examples_dir: Path) -> None:
     assert "一级" in news.output or "信源" in news.output
     assert "未做深度分析" in news.output
     assert "无" in news.output  # 空档打印「无」或分析正文含无
+    assert "大V动态" in news.output
 
     macro = RUNNER.invoke(
         app,

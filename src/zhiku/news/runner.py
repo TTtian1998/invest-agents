@@ -39,6 +39,12 @@ class NewsBundle:
     window_banners: list[str] = field(default_factory=list)
     analysis_engine: str = "rules"
     source_hits: dict = field(default_factory=dict)
+    kol_feed: list[dict] = field(default_factory=list)
+    kol_resonance: list[dict] = field(default_factory=list)
+    kol_skipped: str = ""
+    x_hits: dict = field(default_factory=dict)
+    emergency: dict = field(default_factory=dict)
+    crowding_stats: dict = field(default_factory=dict)
 
     def to_json(self) -> str:
         return json.dumps(self.__dict__, ensure_ascii=False, indent=2, default=str)
@@ -89,12 +95,35 @@ def run_news(
     reactions: list[MarketReaction] = []
 
     fixture_news = paths.fixtures / "news.yaml"
+    from zhiku.news.xwatch import (
+        SKIP_NO_TOKEN,
+        annotate_x_clusters,
+        append_x_calls,
+        bearer_token,
+        key_calls_from_clusters,
+        kol_feed as build_kol_feed,
+        load_fixture_posts,
+        load_watchlist,
+        load_x_calls,
+        summarize_x_hits,
+        update_x_weights,
+    )
+
+    watchlist = load_watchlist(paths=paths, settings=settings.news)
+    notes.extend(watchlist.warnings)
+    kol_skipped = ""
     if provider_kind == "fixture" or not settings.news.enabled:
         if fixture_news.is_file():
             items, reactions = load_fixture_news(fixture_news)
             notes.append("使用离线虚构新闻样本（不访问网络）。")
         else:
             notes.append("缺数据：无 news.yaml，新闻雷达为空。")
+        x_items = load_fixture_posts(paths.fixtures / "x_posts.yaml", watchlist)
+        if x_items:
+            items.extend(x_items)
+            notes.append("使用离线虚构 X 帖子（不访问 X API）。")
+        else:
+            notes.append("缺数据：无 x_posts.yaml，大V动态为空。")
     else:
         from zhiku.data.cache import SQLiteCache
 
@@ -106,7 +135,14 @@ def run_news(
             reactions.extend(extra_rx)
             notes.append("live 源已拉取；fixture 样本仅作补充。")
         for err in errors:
-            notes.append(f"源 {err.source} 失败：{err.reason}（已跳过，不阻塞）")
+            if err.source == "twitter":
+                kol_skipped = err.reason
+                notes.append(err.reason)
+            else:
+                notes.append(f"源 {err.source} 失败：{err.reason}（已跳过，不阻塞）")
+        if settings.news.sources.twitter and not bearer_token() and not kol_skipped:
+            kol_skipped = SKIP_NO_TOKEN
+            notes.append(kol_skipped)
 
     holdings = _holdings(paths)
     if holdings is None:
@@ -166,7 +202,6 @@ def run_news(
     weight_path = paths.journal / "news_weights.json"
     weights = load_weights(weight_path)
     weights = update_weights(weights, stats)
-    save_weights(weight_path, weights)
 
     prices = _prices_from_fund(funds, paths.fixtures / "monthly_prices.csv")
     window_note = None
@@ -182,6 +217,40 @@ def run_news(
         freeze_adds = bool(getattr(macro_bundle, "freeze_adds", False))
         upcoming = list(getattr(macro_bundle, "calendar_7d", None) or [])
         notes.extend(banners)
+
+    resonance = annotate_x_clusters(
+        clusters,
+        watchlist,
+        settings=settings.news,
+        macro_bundle=macro_bundle,
+        on=on,
+        track=track,
+    )
+    hist_calls = load_x_calls(paths.fixtures / "x_calls.yaml")
+    journal_calls = load_x_calls(paths.journal / "x_calls.jsonl")
+    today_calls = key_calls_from_clusters(clusters, on)
+    x_hits = summarize_x_hits(hist_calls + journal_calls + today_calls)
+    weights = update_x_weights(weights, x_hits)
+    save_weights(weight_path, weights)
+    append_x_calls(paths.journal / "x_calls.jsonl", today_calls)
+    feed = build_kol_feed(clusters)
+
+    from zhiku.events.layer import apply_event_layer
+
+    samples = load_event_history(hist_path) if hist_path.is_file() else []
+    layer = apply_event_layer(
+        clusters,
+        paths=paths,
+        on=on,
+        settings=settings,
+        holdings=holdings,
+        samples=list(samples),
+    )
+    notes.extend(layer.notes)
+    if layer.emergency.freeze_adds:
+        freeze_adds = True
+        window_note = (window_note or "") + "；应急模式禁加"
+
     from zhiku.news.analyze import analyze_clusters
 
     cards, low_n = analyze_clusters(
@@ -208,6 +277,20 @@ def run_news(
         event_window_note=window_note,
         freeze_adds=freeze_adds,
         chain_names={c.id: c.name for c in chains},
+    )
+    from zhiku.events.invalidation import attach_invalidation
+    from zhiku.events.log import DecisionLog
+
+    attach_invalidation(
+        opps, clusters, on=on, event_settings=settings.events, news_settings=settings.news
+    )
+    DecisionLog(paths.journal / "decisions.jsonl").append_many(
+        "opportunity",
+        [o.to_dict() for o in opps],
+    )
+    DecisionLog(paths.journal / "decisions.jsonl").append_many(
+        "analysis",
+        [c.to_dict() for c in cards],
     )
     card_by_subject = {c.subject: c for c in cards}
     for o in opps:
@@ -250,6 +333,12 @@ def run_news(
         window_banners=list(getattr(macro_bundle, "window_banners", None) or []) if macro_bundle else [],
         analysis_engine=engine,
         source_hits=source_hitrate(followups),
+        kol_feed=feed,
+        kol_resonance=resonance,
+        kol_skipped=kol_skipped,
+        x_hits=x_hits,
+        emergency=layer.emergency.to_dict(),
+        crowding_stats=layer.crowding_stats,
     )
 
 
@@ -276,6 +365,30 @@ def _cluster_dict(c: ClusteredNews) -> dict:
         "official_url": c.official_url,
         "official_followup": c.official_followup,
         "institution_review": c.institution_review.to_dict() if c.institution_review else None,
+        "x_handles": c.x_handles,
+        "x_category": c.x_category,
+        "tickers": c.tickers,
+        "resonance": c.resonance,
+        "reverse_risk": c.reverse_risk,
+        "newswire_matched": c.newswire_matched,
+        "fomc_boost": c.fomc_boost,
+        "first_seen": c.first_seen.isoformat() if c.first_seen else None,
+        "first_source": c.first_source,
+        "novelty": c.novelty,
+        "session": c.session,
+        "earliest_executable": c.earliest_executable,
+        "decay": c.decay,
+        "stale": c.stale,
+        "surprise_z": c.surprise_z,
+        "surprise_missing": c.surprise_missing,
+        "implied_move": c.implied_move,
+        "vs_implied": c.vs_implied,
+        "crowding": c.crowding,
+        "crowding_bucket": c.crowding_bucket,
+        "crowding_note": c.crowding_note,
+        "graph_impacts": [
+            g.to_dict() if hasattr(g, "to_dict") else g for g in (c.graph_impacts or [])
+        ],
         "sources": [
             {
                 "source": i.source,
@@ -287,6 +400,10 @@ def _cluster_dict(c: ClusteredNews) -> dict:
                 "headline": i.headline,
                 "attribution": i.attribution,
                 "exclusive": i.exclusive,
+                "x_handle": i.x_handle,
+                "x_category": i.x_category,
+                "tickers": i.tickers,
+                "x_direction": i.x_direction,
             }
             for i in c.items
         ],

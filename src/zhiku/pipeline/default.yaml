@@ -75,12 +75,16 @@ news:
   unused_thr: 0.01
   over_thr: 0.04
   score_weights:
-    catalyst: 0.22
-    hist_winrate: 0.18
-    price_confirm: 0.18
-    quality: 0.15
-    correlation: 0.09
-    source: 0.18
+    surprise: 0.16
+    novelty: 0.10
+    decay: 0.08
+    hist_winrate: 0.12
+    crowding: 0.10
+    source: 0.12
+    price_confirm: 0.10
+    quality: 0.12
+    correlation: 0.08
+    catalyst: 0.02
   sources:
     eastmoney_news: true
     cls: true
@@ -99,6 +103,13 @@ news:
     fed: https://www.federalreserve.gov/feeds/press_all.xml
     bls: https://www.bls.gov/feed/bls_latest.rss
     ecb: https://www.ecb.europa.eu/rss/press.html
+  x_accounts_file: config/x_accounts.yaml
+  x_max_posts: 8
+  x_lookback_hours: 36
+  x_throttle_seconds: 0.8
+  x_resonance_min: 3
+  x_extreme_share: 0.80
+  x_fomc_boost: 1.35
 
 macro:
   enabled: true
@@ -115,3 +126,39 @@ macro:
     US_CORE_CPI: {before: 1, after: 1}
     US_PCE: {before: 1, after: 1}
     default: {before: 1, after: 1}
+
+events:
+  enabled: true
+  crowding_high: 0.70
+  crowding_low: 0.30
+  vix_spike: 0.20
+  index_intraday_drop: 0.03
+  emergency_min_sources: 2
+  freeze_adds_on_emergency: true
+  alert_on_emergency: true
+  stale_after_halflives: 1.0
+  half_life_hours:
+    earnings_beat: 48
+    earnings_preview: 72
+    policy: 24
+    sentiment_hot: 6
+    default: 36
+  time_stop_days:
+    earnings_beat: 5
+    policy: 3
+    sentiment_hot: 2
+    default: 5
+  playbook:
+    - 先降风险，不扩大暴露
+    - 不抄底
+    - 等官方表态
+    - 列出受影响持仓代码（不输出数量/成本）和对冲工具
+  emergency_keywords:
+    - 冲突
+    - 制裁
+    - 监管
+    - 袭击
+    - 战争
+    - 熔断
+    - sanction
+    - war

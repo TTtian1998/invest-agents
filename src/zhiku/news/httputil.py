@@ -34,8 +34,17 @@ def throttle(bucket: str = "default") -> None:
     _LAST[bucket] = time.monotonic()
 
 
-def http_get(url: str, *, timeout: float = 12.0, retries: int = 2) -> str | MissingData:
-    req = urllib.request.Request(url, headers={"User-Agent": _UA})
+def http_get(
+    url: str,
+    *,
+    timeout: float = 12.0,
+    retries: int = 2,
+    headers: dict[str, str] | None = None,
+) -> str | MissingData:
+    hdrs = {"User-Agent": _UA}
+    if headers:
+        hdrs.update(headers)
+    req = urllib.request.Request(url, headers=hdrs)
     last: Exception | None = None
     for attempt in range(retries + 1):
         try:
@@ -57,12 +66,17 @@ def cached_json(
     key: str,
     on: date,
     fetcher,
+    *,
+    min_interval: float | None = None,
 ) -> Any | MissingData:
     if cache is not None:
         hit = cache.get(source, key, on, "news")
         if hit is not None:
             return hit
-    throttle(source)
+    if min_interval is None:
+        throttle(source)
+    elif min_interval > 0:
+        time.sleep(min_interval)
     body = fetcher()
     if isinstance(body, MissingData):
         return body

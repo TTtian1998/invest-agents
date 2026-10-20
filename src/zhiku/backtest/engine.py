@@ -49,7 +49,7 @@ def backtest_screen(
         notes.append("已检测到 vectorbt，净值仍按月度等权再平衡计算以便与无 extra 时对齐。")
     else:
         notes.append("未安装 [backtest] extra，使用内置 pandas 月度等权再平衡。")
-    notes.append("MVP 用当前截面排名冻结篮子，再在历史价格上再平衡；点-in-time 财务为后续 TODO。")
+    notes.append("财务截面须按公告日对齐（见 zhiku.events.pit）；本函数只交易价格面板，不向前看未公告财务。")
     result = summarize_nav(
         nav,
         turnover=turnover,
@@ -90,3 +90,51 @@ def backtest_trigger_line(
     nav = (1.0 + strat).cumprod()
     engine = "vectorbt" if vectorbt_available() else "pandas"
     return summarize_nav(nav, returns=strat, rf=0.0, periods_per_year=252, screen="trigger", engine=engine)
+
+
+def backtest_event_trades(
+    prices: pd.DataFrame,
+    events: list[dict],
+    *,
+    cost_bps: float = 10.0,
+) -> BacktestResult:
+    """事件交易回测：下一根 K 线开仓，time_stop 根后或止损出场。与实盘时间止损同一套天数。"""
+    if prices is None or prices.empty or not events:
+        return BacktestResult("event", None, None, None, None, None, notes=["缺价格或无事件"])
+    px = prices.sort_index()
+    rets = px.pct_change().fillna(0.0)
+    strat = pd.Series(0.0, index=px.index)
+    notes = ["事件回测使用 time_stop，不用无限持有。"]
+    for ev in events:
+        symbol = str(ev.get("symbol") or "")
+        if symbol not in px.columns:
+            notes.append(f"{symbol} 缺价格")
+            continue
+        entry = pd.Timestamp(ev.get("entry") or ev.get("date"))
+        days = int(ev.get("time_stop") or ev.get("max_hold_days") or 5)
+        direction = 1.0 if ev.get("direction") in {"做多", "long", 1, "1"} else -1.0
+        stop_pct = float(ev.get("stop_pct") or 0.03)
+        after = px.index[px.index > entry]
+        if len(after) < 1:
+            notes.append(f"{symbol} {entry.date()} 之后无 K 线")
+            continue
+        start = after[0]
+        hold_idx = px.index[(px.index >= start)]
+        if len(hold_idx) > days:
+            hold_idx = hold_idx[:days]
+        entry_px = float(px.loc[start, symbol])
+        if entry_px <= 0:
+            continue
+        for i, ts in enumerate(hold_idx):
+            r = float(rets.loc[ts, symbol]) if ts in rets.index else 0.0
+            strat.loc[ts] = strat.loc[ts] + direction * r
+            if i == 0:
+                strat.loc[ts] = strat.loc[ts] - cost_bps / 10000.0
+            last_px = float(px.loc[ts, symbol])
+            move = (last_px / entry_px - 1.0) * direction
+            if move <= -stop_pct:
+                break
+    nav = (1.0 + strat).cumprod()
+    result = summarize_nav(nav, returns=strat, rf=0.0, periods_per_year=252, screen="event", engine="pandas")
+    result.notes = notes
+    return result

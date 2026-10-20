@@ -1,0 +1,4 @@
+# 默认关闭冲击。测试应急流程时把 vix_change 调到阈值以上。
+vix_change: 0.02
+index_intraday: -0.004
+note: 虚构日常波动，不触发应急。另见 tests 内构造的冲击样本。

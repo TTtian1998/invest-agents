@@ -1,0 +1,29 @@
+# 公开知名产业链示例。节点里的 A 股代码是研究占位（000333/600519/0700.HK），
+# 不是真实供应商，也不代表任何个人持仓。数据逻辑：品牌→一阶供应商→二阶。
+chains:
+  - id: aapl_supply
+    name: 苹果供应链
+    keywords: [苹果, iPhone, AAPL, 苹果供应链]
+    source_note: 公开品牌与行业分类示例；一/二阶用仓库允许的占位代码
+    nodes:
+      - {symbol: AAPL, name: 苹果（品牌）, role: brand, hop: 0, direction: 同向}
+      - {symbol: "000333", name: 示例代工（占位，非真实供应商）, role: supplier, hop: 1, direction: 同向}
+      - {symbol: "0700.HK", name: 示例零部件（占位）, role: component, hop: 2, direction: 同向}
+
+  - id: nvda_server
+    name: 英伟达服务器链
+    keywords: [英伟达, NVIDIA, NVDA, GPU, 算力, 服务器]
+    source_note: 公开算力链结构示例
+    nodes:
+      - {symbol: NVDA, name: 英伟达（品牌）, role: brand, hop: 0, direction: 同向}
+      - {symbol: AAPL, name: 示例云/终端需求（占位）, role: customer, hop: 1, direction: 同向}
+      - {symbol: "000333", name: 示例电源/结构件（占位）, role: supplier, hop: 2, direction: 同向}
+
+  - id: ev_chain
+    name: 新能源车链
+    keywords: [新能源车, 电动车, 锂电, 整车, EV]
+    source_note: 行业分类示例
+    nodes:
+      - {symbol: "600519", name: 示例整车/品牌（占位）, role: oem, hop: 0, direction: 同向}
+      - {symbol: "000333", name: 示例零部件（占位）, role: parts, hop: 1, direction: 同向}
+      - {symbol: "510300", name: 示例中游材料/宽基映射（占位）, role: materials, hop: 2, direction: 同向}

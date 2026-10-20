@@ -49,7 +49,7 @@ def main() -> None:
     if macro is None and macro_path is not None:
         macro = json.loads(macro_path.read_text(encoding="utf-8"))
     tabs = st.tabs(
-        ["今日候选", "单票详情", "回测", "今日舆情", "多空机会", "宏观与事件", "触发线风控", "每周命中率"]
+        ["今日候选", "单票详情", "回测", "今日舆情", "大V动态", "多空机会", "宏观与事件", "触发线风控", "每周命中率"]
     )
 
     with tabs[0]:
@@ -117,6 +117,11 @@ def main() -> None:
             st.info("还没有舆情报告。请先运行 `zk --provider fixture news --date 2026-10-20`。")
         else:
             st.caption(f"分析引擎：{news.get('analysis_engine')}；低价值未展开 {news.get('low_value_count', 0)} 条")
+            em = news.get("emergency") or {}
+            if em.get("active"):
+                st.error("应急模式：" + "；".join(em.get("reasons") or []))
+                for p in em.get("playbook") or []:
+                    st.write(f"- {p}")
             for a in news.get("analyses") or []:
                 st.subheader(a.get("subject") or "")
                 st.caption(a.get("source_grade_label") or "")
@@ -135,8 +140,45 @@ def main() -> None:
 
     with tabs[4]:
         if not news:
+            st.info("还没有舆情报告。请先运行 `zk --provider fixture news --date 2026-10-20`。")
+        else:
+            skipped = news.get("kol_skipped") or ""
+            if skipped:
+                st.warning(skipped)
+            for r in news.get("kol_resonance") or []:
+                st.write(r.get("hint") or "")
+                if r.get("reverse_risk"):
+                    st.caption("情绪极度一致，提示反向拥挤风险。")
+            feed = news.get("kol_feed") or []
+            if not feed:
+                st.write("无")
+            else:
+                rows = [
+                    {
+                        "账号": p.get("handle"),
+                        "分类": p.get("category_cn"),
+                        "方向": p.get("direction"),
+                        "代码": ", ".join(p.get("tickers") or []),
+                        "摘要": p.get("headline"),
+                        "共振": p.get("resonance"),
+                        "反向风险": p.get("reverse_risk"),
+                        "快讯已匹配": p.get("newswire_matched"),
+                    }
+                    for p in feed
+                ]
+                st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+            hits = news.get("x_hits") or {}
+            if hits.get("accounts"):
+                st.subheader("账号命中率（动态权重）")
+                st.dataframe(pd.DataFrame(hits["accounts"]), hide_index=True, use_container_width=True)
+
+    with tabs[5]:
+        if not news:
             st.info("无多空机会。")
         else:
+            em = news.get("emergency") or {}
+            if em.get("active"):
+                st.error("应急模式：机会已降为只观察/禁加")
             for tier in ("质量档", "交易档", "只观察"):
                 rows = (news.get("by_tier") or {}).get(tier) or []
                 st.subheader(tier)
@@ -144,8 +186,9 @@ def main() -> None:
                     st.write("无")
                 else:
                     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+                    st.caption("失效条件与时间止损见 invalidation / time_stop_on。")
 
-    with tabs[5]:
+    with tabs[6]:
         if not macro:
             st.info("还没有宏观报告。请先运行 `zk --provider fixture macro --date 2026-10-20`。")
         else:
@@ -173,7 +216,7 @@ def main() -> None:
                 st.write("传导链")
                 st.json(macro["chains_fired"])
 
-    with tabs[6]:
+    with tabs[7]:
         st.write("读取 `ZHIKU_KB` 下的规则与持仓；若不存在则回退到仓库内虚构示例。")
         rule_paths = paths
         source = "ZHIKU_KB"
@@ -218,7 +261,7 @@ def main() -> None:
             except RulesSchemaError as exc:
                 st.error(str(exc))
 
-    with tabs[7]:
+    with tabs[8]:
         events = EventLog(paths.events).read() if paths.events.is_file() else []
         if not events:
             example = _examples_kb()
@@ -256,6 +299,10 @@ def main() -> None:
                 )
             for lesson in week.lessons:
                 st.caption(lesson)
+            x_hits = (news or {}).get("x_hits") if news else None
+            if x_hits and x_hits.get("accounts"):
+                st.subheader("大V命中率")
+                st.dataframe(pd.DataFrame(x_hits["accounts"]), hide_index=True, use_container_width=True)
 
 
 if __name__ == "__main__":

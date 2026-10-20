@@ -38,6 +38,10 @@ class NewsItem(BaseModel):
     attribution: str = ""
     exclusive: bool = False
     paywall: bool = False
+    x_handle: str = ""
+    x_category: str = ""
+    tickers: list[str] = Field(default_factory=list)
+    x_direction: str = ""
 
 
 class InstitutionReview(BaseModel):
@@ -51,6 +55,8 @@ class InstitutionReview(BaseModel):
     key_assumptions: str = ""
     consensus_gap: str = ""
     counter_view: str = ""
+    known_holdings: str = ""
+    conflicts: str = ""
 
     def to_dict(self) -> dict:
         return self.model_dump(mode="json")
@@ -82,6 +88,35 @@ class ClusteredNews(BaseModel):
     official_url: str = ""
     official_followup: str | None = None
     institution_review: InstitutionReview | None = None
+    x_handles: list[str] = Field(default_factory=list)
+    x_category: str = ""
+    tickers: list[str] = Field(default_factory=list)
+    resonance: bool = False
+    reverse_risk: bool = False
+    newswire_matched: bool = False
+    fomc_boost: bool = False
+    first_seen: datetime | None = None
+    first_source: str = ""
+    novelty: float | None = None
+    session: str = ""
+    session_market: str = ""
+    earliest_executable: str = ""
+    decay: float = 1.0
+    stale: bool = False
+    half_life_hours: float | None = None
+    surprise_z: float | None = None
+    surprise_missing: str | None = None
+    implied_move: float | None = None
+    actual_move: float | None = None
+    vs_implied: str = ""
+    surprise: object | None = None
+    crowding: float | None = None
+    crowding_bucket: str = ""
+    crowding_note: str = ""
+    crowding_factor: float = 1.0
+    crowding_card: object | None = None
+    novelty_card: object | None = None
+    graph_impacts: list = Field(default_factory=list)
 
 
 class MarketReaction(BaseModel):
@@ -121,6 +156,17 @@ class Opportunity(BaseModel):
     source_grade: int | None = None
     source_grade_label: str = ""
     institution_review: dict | None = None
+    invalidation: str = ""
+    time_stop: int | None = None
+    time_stop_on: date | None = None
+    stale: bool = False
+    novelty: float | None = None
+    crowding: float | None = None
+    surprise_z: float | None = None
+    vs_implied: str = ""
+    graph_impacts: list[dict] = Field(default_factory=list)
+    earliest_executable: str = ""
+    expired: bool = False
 
     def to_dict(self) -> dict:
         return self.model_dump(mode="json")

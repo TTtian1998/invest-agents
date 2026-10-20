@@ -5,6 +5,13 @@ samples:
     t1: 0.018
     t5: 0.025
     t20: 0.01
+    crowding_bucket: low
+  - catalyst: earnings_beat
+    source: eastmoney
+    t1: -0.01
+    t5: -0.02
+    t20: -0.03
+    crowding_bucket: high
   - catalyst: earnings_beat
     source: cninfo
     t1: 0.012

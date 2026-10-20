@@ -90,12 +90,32 @@ class AISettings(BaseModel):
 
 
 class NewsScoreWeights(BaseModel):
-    catalyst: float = 0.22
-    hist_winrate: float = 0.18
-    price_confirm: float = 0.18
-    quality: float = 0.15
-    correlation: float = 0.09
-    source: float = 0.18
+    """综合打分权重。预期差驱动，不按消息「好坏」打分。"""
+
+    surprise: float = 0.16
+    novelty: float = 0.10
+    decay: float = 0.08
+    hist_winrate: float = 0.12
+    crowding: float = 0.10
+    source: float = 0.12
+    price_confirm: float = 0.10
+    quality: float = 0.12
+    correlation: float = 0.08
+    catalyst: float = 0.02  # 残留项，不代表利好/利空
+
+    def total(self) -> float:
+        return (
+            self.surprise
+            + self.novelty
+            + self.decay
+            + self.hist_winrate
+            + self.crowding
+            + self.source
+            + self.price_confirm
+            + self.quality
+            + self.correlation
+            + self.catalyst
+        )
 
 
 class NewsSourceFlags(BaseModel):
@@ -147,6 +167,13 @@ class NewsSettings(BaseModel):
     score_weights: NewsScoreWeights = Field(default_factory=NewsScoreWeights)
     unused_thr: float = 0.01
     over_thr: float = 0.04
+    x_accounts_file: str = "config/x_accounts.yaml"
+    x_max_posts: int = 8
+    x_lookback_hours: int = 36
+    x_throttle_seconds: float = 0.8
+    x_resonance_min: int = 3
+    x_extreme_share: float = 0.80
+    x_fomc_boost: float = 1.35
 
 
 class EventWindowRule(BaseModel):
@@ -182,6 +209,72 @@ class MacroSettings(BaseModel):
         return {"before": rule.before, "after": rule.after}
 
 
+class EventSettings(BaseModel):
+    """第 6/7 块事件驱动层：预期差、时效、拥挤、传导、止损、应急。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = True
+    half_life_hours: dict[str, float] = Field(
+        default_factory=lambda: {
+            "earnings_beat": 48.0,
+            "earnings_preview": 72.0,
+            "guidance": 48.0,
+            "buyback": 72.0,
+            "policy": 24.0,
+            "sentiment_hot": 6.0,
+            "lhb": 12.0,
+            "rating_up": 36.0,
+            "rating_down": 36.0,
+            "default": 36.0,
+        }
+    )
+    time_stop_days: dict[str, int] = Field(
+        default_factory=lambda: {
+            "earnings_beat": 5,
+            "earnings_preview": 10,
+            "policy": 3,
+            "buyback": 10,
+            "sentiment_hot": 2,
+            "lhb": 3,
+            "rating_up": 5,
+            "rating_down": 5,
+            "default": 5,
+        }
+    )
+    crowding_high: float = 0.70
+    crowding_low: float = 0.30
+    vix_spike: float = 0.20
+    index_intraday_drop: float = 0.03
+    emergency_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "冲突",
+            "制裁",
+            "监管",
+            "袭击",
+            "战争",
+            "熔断",
+            "禁运",
+            "sanction",
+            "war",
+            "default",
+            "halt",
+        ]
+    )
+    emergency_min_sources: int = 2
+    freeze_adds_on_emergency: bool = True
+    alert_on_emergency: bool = True
+    playbook: list[str] = Field(
+        default_factory=lambda: [
+            "先降风险，不扩大暴露",
+            "不抄底",
+            "等官方表态",
+            "列出受影响持仓代码（不输出数量/成本）和对冲工具",
+        ]
+    )
+    stale_after_halflives: float = 1.0
+
+
 class PipelineSettings(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -196,6 +289,7 @@ class PipelineSettings(BaseModel):
     ai: AISettings = Field(default_factory=AISettings)
     news: NewsSettings = Field(default_factory=NewsSettings)
     macro: MacroSettings = Field(default_factory=MacroSettings)
+    events: EventSettings = Field(default_factory=EventSettings)
 
 
 DEFAULT_YAML = Path(__file__).resolve().parent / "default.yaml"

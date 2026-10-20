@@ -1,0 +1,47 @@
+# Point-in-time 财务。announced 是公告日；period 是报告期。禁止用报告期对齐。
+rows:
+  - symbol: "000333"
+    name: 示例家电个股
+    industry: 家电
+    industry_leader: true
+    period: 2026-06-30
+    announced: 2026-08-20
+    roe: 0.21
+    ocf: 50000000000
+    net_income: 38000000000
+    pe: 15.0
+    pb: 2.5
+    mktcap: 300000000000
+    amount_avg: 4000000000
+    debt_asset: 0.50
+    roe_3y: [0.19, 0.20, 0.21]
+  - symbol: "000333"
+    name: 示例家电个股
+    industry: 家电
+    industry_leader: true
+    period: 2026-09-30
+    announced: 2026-10-25
+    roe: 0.99
+    ocf: 1
+    net_income: 1
+    pe: 1.0
+    pb: 1.0
+    mktcap: 1
+    amount_avg: 1
+    debt_asset: 0.10
+    roe_3y: [0.99, 0.99, 0.99]
+  - symbol: AAPL
+    name: 示例美股
+    industry: 科技
+    industry_leader: true
+    market: US
+    period: 2026-06-30
+    announced: 2026-08-01
+    roe: 0.40
+    ocf: 100000000000
+    net_income: 90000000000
+    pe: 28.0
+    pb: 8.0
+    mktcap: 3000000000000
+    amount_avg: 8000000000
+    debt_asset: 0.30

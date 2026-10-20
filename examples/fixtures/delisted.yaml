@@ -1,0 +1,5 @@
+# 虚构退市样本，用于幸存者偏差测试。
+delisted:
+  - symbol: GONE
+    delisted_on: 2026-06-01
+    name: 示例已退市

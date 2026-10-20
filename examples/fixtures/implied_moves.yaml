@@ -1,0 +1,12 @@
+# 虚构平值跨式近似，不是 CME/交易所官方结算。
+moves:
+  - symbol: AAPL
+    asof: 2026-10-20
+    implied_move: 0.030
+    method: atm_straddle_approx
+    note: 虚构
+  - symbol: "0700.HK"
+    asof: 2026-10-20
+    implied_move: 0.022
+    method: atm_straddle_approx
+    note: 虚构

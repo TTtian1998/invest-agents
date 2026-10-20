@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from zhiku.events.scoring import composite_score
 from zhiku.news.grades import grade_weight
+from zhiku.news.xwatch import account_weight, fomc_weight
 from zhiku.news.models import ClusteredNews, Direction, Opportunity, Tier
 from zhiku.pipeline.settings import NewsSettings
 from zhiku.screens.fundamentals import Fundamentals
@@ -66,45 +68,16 @@ def score_cluster(
     catalyst_weight: float,
     settings: NewsSettings,
 ) -> float:
-    strength = 1.0
-    if "事实" in cluster.tags:
-        strength += 0.4
-    if cluster.freshness == "NEW":
-        strength += 0.2
-    if cluster.freshness == "旧闻翻炒":
-        strength -= 0.4
-    if cluster.reaction == "未反应":
-        px = 1.15
-    elif cluster.reaction == "已反应":
-        px = 0.85
-    elif cluster.reaction == "过度反应":
-        px = 0.4
-    else:
-        px = 0.7  # 缺价量确认，降权但不编造
-    hw = hist_winrate if hist_winrate is not None else 0.5
-    q = quality_score if quality_score is not None else 0.5
-    if screen_score is not None:
-        q = 0.5 * q + 0.5 * (screen_score / 100.0)
-    if qlib_score is not None:
-        q = 0.7 * q + 0.3 * (qlib_score / 100.0)
-    corr = 1.0
-    if holding_related is True:
-        corr = 1.0  # 持仓相关是提醒加分项，但相关过高不一定加交易分
-    elif holding_related is False:
-        corr = 1.0 + settings.low_corr_bonus
-    w = settings.score_weights
-    return max(
-        0.0,
-        100.0
-        * (
-            w.catalyst * strength * catalyst_weight
-            + w.hist_winrate * hw
-            + w.price_confirm * px
-            + w.quality * q
-            + w.correlation * corr
-            + w.source * source_weight
-        )
-        / max(0.1, w.catalyst + w.hist_winrate + w.price_confirm + w.quality + w.correlation + w.source),
+    return composite_score(
+        cluster,
+        hist_winrate=hist_winrate,
+        quality_score=quality_score,
+        screen_score=screen_score,
+        qlib_score=qlib_score,
+        holding_related=holding_related,
+        source_weight=source_weight,
+        catalyst_weight=catalyst_weight,
+        settings=settings,
     )
 
 
@@ -127,7 +100,10 @@ def build_opportunities(
     out: list[Opportunity] = []
     for cluster in clusters:
         if not cluster.symbol:
-            continue
+            if cluster.tickers:
+                cluster.symbol = cluster.tickers[0]
+            else:
+                continue
         symbol = cluster.symbol
         fund = funds.get(symbol)
         name = cluster.name or (fund.name if fund else symbol)
@@ -149,7 +125,9 @@ def build_opportunities(
         holding = None if holding_symbols is None else (symbol in holding_symbols)
         srcs = [i.source for i in cluster.items]
         learned = sum(weights.get("source", {}).get(s, 1.0) for s in srcs) / max(1, len(srcs))
-        src_w = grade_weight(cluster) * learned
+        src_w = grade_weight(cluster) * learned * account_weight(cluster, weights) * fomc_weight(
+            cluster, settings
+        )
         cat_w = weights.get("catalyst", {}).get(cluster.catalyst, 1.0)
         screens = screen_scores.get(symbol) or {}
         best_screen = max(screens.values()) if screens else None
@@ -178,8 +156,21 @@ def build_opportunities(
             if freeze_adds and tier in {"质量档", "交易档"}:
                 tier = "只观察"
                 risk += "；事件窗口配置为禁加，机会降为只观察"
+        if cluster.resonance:
+            risk = f"{risk}；多账号共振" if risk else "多账号共振"
+        if cluster.reverse_risk:
+            risk = f"{risk}；情绪极度一致，提示反向拥挤风险"
+        if cluster.crowding_note:
+            risk = f"{risk}；{cluster.crowding_note}" if risk else cluster.crowding_note
+        if cluster.stale:
+            risk = f"{risk}；已过时（超过半衰期）" if risk else "已过时（超过半衰期）"
+            if tier in {"质量档", "交易档"}:
+                tier = "只观察"
         names = chain_names or {}
         chain_labels = [names.get(cid, cid) for cid in cluster.chain_ids]
+        impacts = []
+        for g in cluster.graph_impacts or []:
+            impacts.append(g.to_dict() if hasattr(g, "to_dict") else g)
         out.append(
             Opportunity(
                 symbol=symbol,
@@ -210,6 +201,13 @@ def build_opportunities(
                 institution_review=(
                     cluster.institution_review.to_dict() if cluster.institution_review else None
                 ),
+                novelty=cluster.novelty,
+                crowding=cluster.crowding,
+                surprise_z=cluster.surprise_z,
+                vs_implied=cluster.vs_implied,
+                graph_impacts=impacts,
+                earliest_executable=cluster.earliest_executable,
+                stale=cluster.stale,
             )
         )
     out.sort(key=lambda x: x.score, reverse=True)

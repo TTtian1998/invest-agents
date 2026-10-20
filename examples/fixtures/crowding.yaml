@@ -1,0 +1,18 @@
+# 虚构拥挤度输入，已缩放到 0-1。不是真实融资/北向/期权数据。
+items:
+  - symbol: "000333"
+    margin_change: 0.42
+    northbound: 0.38
+    main_net: 0.40
+    lhb_concentration: 0.35
+    turnover_pct: 0.44
+  - symbol: AAPL
+    put_call: 0.90
+    short_interest: 0.40
+    retail_heat: 0.95
+    turnover_pct: 0.85
+  - symbol: "600519"
+    margin_change: 0.15
+    northbound: 0.12
+    main_net: 0.18
+    turnover_pct: 0.20

@@ -1,0 +1,17 @@
+{% if news.emergency and news.emergency.active %}
+## 应急模式
+{% for r in news.emergency.reasons %}
+- {{ r }}
+{% endfor %}
+{% for p in news.emergency.playbook %}
+- {{ p }}
+{% endfor %}
+{% if news.emergency.affected %}
+- 受影响持仓代码：{{ news.emergency.affected | join("、") }}（不展示数量/成本）
+{% endif %}
+{% if news.emergency.hedges %}
+{% for h in news.emergency.hedges %}
+- {{ h }}
+{% endfor %}
+{% endif %}
+{% endif %}

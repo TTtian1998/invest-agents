@@ -28,6 +28,21 @@
   {% else %}
   <p class="note">缺数据：宏观模块未运行。</p>
   {% endif %}
+  {% set nws = daily.news %}
+  <h2>大V动态</h2>
+  {% if nws and nws.kol_skipped %}<p class="note">{{ nws.kol_skipped }}</p>{% endif %}
+  {% if nws and nws.kol_resonance %}
+  <ul>{% for r in nws.kol_resonance %}<li>{{ r.hint }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% if nws and nws.kol_feed %}
+  <ul>
+    {% for p in nws.kol_feed %}
+    <li>@{{ p.handle }}（{{ p.category_cn }}）{{ p.headline }}</li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="note">无</p>
+  {% endif %}
   <h2>今日候选</h2>
   <table>
     <tr><th>代码</th><th>名称</th><th>总分</th><th>公式分</th><th>qlib</th><th>来源</th></tr>

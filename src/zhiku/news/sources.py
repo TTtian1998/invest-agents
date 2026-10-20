@@ -86,7 +86,7 @@ def fetch_live(
     add("eastmoney_hot", flags.eastmoney_hot, lambda: _ak_hot(on))
     add("lhb", flags.lhb, lambda: _ak_lhb(on))
     add("apewisdom", flags.apewisdom, lambda: _apewisdom(on, cache))
-    add("twitter", flags.twitter, lambda: _twitter(on))
+    add("twitter", flags.twitter, lambda: _twitter(on, settings, cache))
     annotate_items(items)
     return items, errors
 
@@ -364,10 +364,10 @@ def _apewisdom(on: date, cache: SQLiteCache | None) -> list[NewsItem]:
     return items
 
 
-def _twitter(on: date) -> list[NewsItem]:
-    token = os.environ.get("TWITTER_BEARER_TOKEN") or os.environ.get("X_BEARER_TOKEN")
-    if not token:
-        return []
-    # 有 token 才请求；失败由 _safe 吞掉。不在仓库里写任何真实检索词配置。
-    del on
-    return []
+def _twitter(on: date, settings: NewsSettings, cache: SQLiteCache | None) -> list[NewsItem]:
+    from zhiku.news.xwatch import XSkipped, fetch_live_posts
+
+    try:
+        return fetch_live_posts(on, settings, cache)
+    except XSkipped as exc:
+        raise RuntimeError(str(exc)) from exc

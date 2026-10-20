@@ -35,6 +35,16 @@
 本周无已落地宏观剧本样本。
 {% endif %}
 
+## 大V命中率
+{% if x_hits is defined and x_hits and x_hits.accounts %}
+- 合计：兑现 {{ x_hits.hit }}；落空 {{ x_hits.miss }}；待定 {{ x_hits.pending }}；命中率 {{ "%.0f%%"|format(x_hits.hit_rate * 100) if x_hits.hit_rate is not none else "缺数据" }}
+{% for a in x_hits.accounts %}
+- @{{ a.handle }}{% if a.category %}（{{ a.category }}）{% endif %}：命中 {{ a.hit }} / 落空 {{ a.miss }} / 待定 {{ a.pending }}；命中率 {{ "%.0f%%"|format(a.hit_rate * 100) if a.hit_rate is not none else "缺数据" }}
+{% endfor %}
+{% else %}
+缺数据：本周无大V关键判断样本。
+{% endif %}
+
 ## 信源跟踪命中率
 {% if source_hits %}
 - 知情人士后续：确认 {{ source_hits.confirmed }}；否认 {{ source_hits.denied }}；待定 {{ source_hits.pending }}；命中率 {{ "%.0f%%"|format(source_hits.hit_rate * 100) if source_hits.hit_rate is not none else "缺数据" }}

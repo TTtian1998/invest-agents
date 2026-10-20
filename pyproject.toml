@@ -42,6 +42,9 @@ allow-direct-references = true
 "src/zhiku/pipeline/default.yaml" = "zhiku/pipeline/default.yaml"
 "src/zhiku/macro/chains.yaml" = "zhiku/macro/chains.yaml"
 "src/zhiku/news/grades.yaml" = "zhiku/news/grades.yaml"
+"config/x_accounts.example.yaml" = "zhiku/news/x_accounts.example.yaml"
+"src/zhiku/events/supply_chains.yaml" = "zhiku/events/supply_chains.yaml"
+"src/zhiku/events/playbook.yaml" = "zhiku/events/playbook.yaml"
 
 [tool.pytest.ini_options]
 addopts = "-m \"not network\""

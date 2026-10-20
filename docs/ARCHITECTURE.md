@@ -9,6 +9,7 @@ flowchart TD
   merge --> backtest[回测闸门]
   backtest --> daily[zk daily]
   newsSrc[分级信源] --> news[新闻雷达]
+  xWatch[X大V YAML名单] --> news
   macroSrc[日历 / FRED / 期货近似] --> macro[宏观锚点]
   news --> analyze[分析层 LLM或规则模板]
   macro --> analyze
@@ -25,11 +26,12 @@ flowchart TD
 - `zhiku/screens`：Greenblatt / Piotroski / 低估值高分红 / 质量+动量，以及质量门槛。
 - `zhiku/factors`：与 qlib 的可选衔接；未安装则分数为空。
 - `zhiku/backtest`：pandas 月度等权，vectorbt 可选。
-- `zhiku/news`：扫描、聚合、价量确认、**信源分级**、机会、分析层。
+- `zhiku/news`：扫描、聚合、价量确认、**信源分级**、X 大V 跟踪、机会、分析层。
+- `zhiku/events`：预期差、新颖度/半衰期、拥挤度、产业链+地缘传导、失效/时间止损、黑天鹅协议、PIT 财务、只追加决策日志。
 - `zhiku/macro`：日历、预期差、事件剧本、传导链 YAML、事件窗口、利率近似。
 - `zhiku/analyze.py`：共享分析卡片；无 key 降级并标「未做深度分析」。
 - `zhiku/engine`：触发线与成长仓闸门；LLM 不进入。
-- `zhiku/app`：Streamlit，含「今日舆情」「多空机会」「宏观与事件」。
+- `zhiku/app`：Streamlit，含「今日舆情」「大V动态」「多空机会」「宏观与事件」。
 
 ## 信源分级
 
@@ -39,6 +41,7 @@ flowchart TD
 - 三级不能单独成事实，也不能单独进质量档；必须带 `InstitutionReview` 五个字段。
 - 社交只做情绪。
 - 「据知情人士」→「未经官方证实」，`followups` 跟踪确认/否认。
+- X 大V：`newswire` 匹配一/二级才标事实；`institutional` 三级审查（持仓代码+利益关系）；`macro_fed` 在 FOMC 窗口加权；共振/反向风险；按账号命中率调权。
 
 ## 缺数据
 
@@ -54,4 +57,4 @@ flowchart TD
 
 ## 测试
 
-默认 `pytest -m "not network"`。网络烟测需显式选中。分析层测试覆盖无 key 降级与字段完整性；新闻测试覆盖分级打分与三级审查字段。
+默认 `pytest -m "not network"`。网络烟测需显式选中。分析层测试覆盖无 key 降级与字段完整性；新闻测试覆盖分级打分与三级审查字段；事件层覆盖缺预期、T+1 可执行、拥挤分组、传导 hop、到期「未兑现，撤」、应急清单、PIT 无前视。

@@ -1,0 +1,44 @@
+# 虚构大V历史判断与 T+1 超额，供每周命中率与动态权重。不是真实交易。
+calls:
+  - handle: michaeljburry
+    date: 2026-10-13
+    symbol: AAPL
+    direction: 看空
+    headline: "Fictional prior call: reducing $AAPL"
+    t1: -0.012
+  - handle: jimcramer
+    date: 2026-10-13
+    symbol: AAPL
+    direction: 看多
+    headline: "Fictional prior call: buy $AAPL"
+    t1: -0.012
+  - handle: CathieDWood
+    date: 2026-10-14
+    symbol: AAPL
+    direction: 看多
+    headline: "Fictional prior call: adding $AAPL"
+    t1: 0.018
+  - handle: BillAckman
+    date: 2026-10-14
+    symbol: AAPL
+    direction: 看多
+    headline: "Fictional prior call: constructive $AAPL"
+    t1: 0.018
+  - handle: GoldmanSachs
+    date: 2026-10-15
+    symbol: AAPL
+    direction: 看多
+    headline: "Fictional prior upgrade $AAPL"
+    t1: 0.004
+  - handle: unusual_whales
+    date: 2026-10-15
+    symbol: AAPL
+    direction: 看多
+    headline: "Fictional flow: $AAPL calls"
+    t1: 0.004
+  - handle: NickTimiraos
+    date: 2026-10-16
+    symbol: ""
+    direction: ""
+    headline: "Fictional FOMC preview, no directional ticker call"
+    t1: null

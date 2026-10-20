@@ -1,0 +1,103 @@
+"""把事件驱动层挂到新闻簇上，并写决策日志。"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import date
+from pathlib import Path
+
+from zhiku.config import Paths
+from zhiku.events.blackswan import detect_emergency, load_playbook, load_shock_fixture
+from zhiku.events.crowding import attach_crowding, load_crowding, summarize_by_crowding
+from zhiku.events.graph import attach_graph
+from zhiku.events.log import DecisionLog
+from zhiku.events.models import Emergency
+from zhiku.events.novelty import attach_novelty
+from zhiku.events.surprise import asof_filter, attach_surprise, load_consensus, load_implied_moves
+from zhiku.news.models import ClusteredNews
+from zhiku.pipeline.settings import PipelineSettings
+
+
+@dataclass
+class EventLayerResult:
+    emergency: Emergency
+    crowding_stats: dict = field(default_factory=dict)
+    notes: list[str] = field(default_factory=list)
+
+
+def apply_event_layer(
+    clusters: list[ClusteredNews],
+    *,
+    paths: Paths,
+    on: date,
+    settings: PipelineSettings,
+    holdings: set[str] | None,
+    samples: list | None = None,
+) -> EventLayerResult:
+    ev = settings.events
+    notes: list[str] = []
+    if not ev.enabled:
+        return EventLayerResult(emergency=Emergency(), notes=["事件驱动层关闭"])
+
+    cards = asof_filter(load_consensus(paths.fixtures / "earnings_consensus.yaml"), on)
+    implied = load_implied_moves(paths.fixtures / "implied_moves.yaml")
+    attach_surprise(clusters, cards, implied)
+
+    hist_avgs: dict[str, tuple[float | None, float | None]] = {}
+    for s in samples or []:
+        hist_avgs.setdefault(s.catalyst, (None, None))
+    # 由 runner 传入 summarize 后的均值更准确；这里仅占位，novelty 用配置半衰期
+    attach_novelty(
+        clusters,
+        on=on,
+        settings=ev,
+        journal=paths.journal / "first_seen.jsonl",
+        hist_avgs=hist_avgs,
+    )
+    snaps = load_crowding(paths.fixtures / "crowding.yaml")
+    attach_crowding(clusters, snaps, ev)
+    attach_graph(
+        clusters,
+        supply_path=_first_existing(
+            paths.kb / "config" / "supply_chains.yaml",
+            paths.fixtures / "supply_chains.yaml",
+        ),
+        geo_path=paths.kb / "config" / "chains.yaml",
+    )
+    shock = load_shock_fixture(paths.fixtures / "blackswan.yaml")
+    playbook = load_playbook(paths.kb / "config" / "playbook.yaml") or ev.playbook
+    emergency = detect_emergency(
+        clusters=clusters, settings=ev, shock=shock, holdings=holdings, playbook=playbook
+    )
+    if emergency.active:
+        notes.append("应急模式：" + "；".join(emergency.reasons))
+        notes.extend(emergency.playbook)
+        if emergency.freeze_adds:
+            notes.append("应急模式：触发线禁加")
+        if ev.alert_on_emergency:
+            try:
+                from zhiku.news.alerts import dispatch
+
+                body = "\n".join(emergency.reasons + emergency.playbook)
+                notes.extend(dispatch("zhiku 应急模式", body))
+            except Exception as exc:  # noqa: BLE001
+                notes.append(f"应急推送跳过：{exc}")
+    crowd_stats = summarize_by_crowding(samples or [])
+    log = DecisionLog(paths.journal / "decisions.jsonl")
+    log.append(
+        "event_layer",
+        {
+            "asof": on.isoformat(),
+            "n_clusters": len(clusters),
+            "emergency": emergency.to_dict(),
+            "crowding_stats": crowd_stats,
+        },
+    )
+    return EventLayerResult(emergency=emergency, crowding_stats=crowd_stats, notes=notes)
+
+
+def _first_existing(*paths: Path) -> Path | None:
+    for p in paths:
+        if p.is_file():
+            return p
+    return None

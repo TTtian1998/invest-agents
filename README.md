@@ -61,7 +61,19 @@ zk --provider live daily --date 2026-10-20
 3. **三级·投资机构**：券商研报、评级、目标价。必须做辩证审查：`institution_stance` / `track_record` / `key_assumptions` / `consensus_gap` / `counter_view`。**不能单独**触发「事实」标签或质量档机会。
 4. 社交/自媒体只作情绪信号。
 
+### X 财经大V
+
+可配置关注名单见仓库 `config/x_accounts.example.yaml`（复制到 `ZHIKU_KB/config/x_accounts.yaml`）。分类：`newswire` 快讯、`macro_fed` 美联储/宏观、`institutional` 机构大佬、`flow_trader` 交易/资金流、`contrarian` 反向参考。
+
+采集走 X API v2，Bearer 读 `TWITTER_BEARER_TOKEN` 或 `X_BEARER_TOKEN`；没配 token 就跳过并在报告里标注。支持限流与 SQLite 缓存。离线测试用 `examples/fixtures/x_posts.yaml` 虚构帖子。
+
+规则：快讯必须匹配到一级或二级信源后才能标「事实」；机构帖按三级做辩证审查（写出已知公开持仓代码与利益关系，不写数量）；`macro_fed` 在 FOMC 事件窗口内加权；帖子里的股票代码进入机会雷达；多账号同向标「共振」，情绪极度一致提示反向风险。每个账号的关键判断计入每周命中率，并按命中率动态调整权重。报告和看板有独立一节「大V动态」。
+
 报告里每条新闻都标信源等级。
+
+### 事件驱动层
+
+打分由**预期差**驱动（一致预期 / 标准化 surprise / 美股隐含涨跌幅），不是消息「好坏」。缺预期写「缺数据」。每条记录 `first_seen` 与新颖度、发布时段（盘前/盘中/盘后/隔夜）和 A 股 T+1 最早可执行时点；超过半衰期标「已过时」。拥挤度综合融资、北向、主力、龙虎榜、换手，以及美股 put/call、做空、零售热度；拥挤时好消息标「利好出尽风险」。产业链 YAML 与地缘传导合并，事件打出一阶/二阶受影响方向。每个机会必带 `invalidation` 与 `time_stop`，到期触发线提示「未兑现，撤」，回测用同一时间止损。日历外冲击（VIX、指数盘中跌幅、多源冲突/制裁关键词）进入应急模式：先降风险、不抄底、等官方表态。判断写入只追加的 `journal/decisions.jsonl`。回测财务按**公告日**对齐，处理退市幸存者偏差，并有前视偏差测试。
 
 ## 宏观锚点
 

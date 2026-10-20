@@ -18,6 +18,8 @@ class EventSample(BaseModel):
     t1: float | None = None
     t5: float | None = None
     t20: float | None = None
+    crowding_bucket: str = ""
+    surprise_z: float | None = None
 
 
 class CatalystStat(BaseModel):
@@ -111,7 +113,7 @@ def event_study_from_prices(
 
 
 def default_weights() -> dict[str, dict[str, float]]:
-    return {"catalyst": {}, "source": {}}
+    return {"catalyst": {}, "source": {}, "x_handle": {}}
 
 
 def load_weights(path: Path) -> dict[str, dict[str, float]]:
@@ -124,6 +126,7 @@ def load_weights(path: Path) -> dict[str, dict[str, float]]:
     return {
         "catalyst": {str(k): float(v) for k, v in (data.get("catalyst") or {}).items()},
         "source": {str(k): float(v) for k, v in (data.get("source") or {}).items()},
+        "x_handle": {str(k).lower(): float(v) for k, v in (data.get("x_handle") or {}).items()},
     }
 
 

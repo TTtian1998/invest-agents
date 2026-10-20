@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -23,6 +24,8 @@ REVIEW_FIELDS = (
     "key_assumptions",
     "consensus_gap",
     "counter_view",
+    "known_holdings",
+    "conflicts",
 )
 
 
@@ -189,16 +192,24 @@ def grade_weight(cluster: ClusteredNews, book: dict | None = None) -> float:
 def review_institution(
     cluster: ClusteredNews,
     track: dict[str, dict] | None = None,
+    account: Any = None,
 ) -> InstitutionReview:
     inst = next((i.source for i in cluster.items if i.source_grade == 3), cluster.items[0].source if cluster.items else "unknown")
-    direction = "看多" if cluster.catalyst in {"rating_up", "buyback", "earnings_beat"} else (
-        "看空" if cluster.catalyst in {"rating_down", "regulator"} else "观点不明"
+    x_dir = next((i.x_direction for i in cluster.items if i.x_direction in {"看多", "看空"}), "")
+    direction = x_dir or (
+        "看多" if cluster.catalyst in {"rating_up", "buyback", "earnings_beat"} else (
+            "看空" if cluster.catalyst in {"rating_down", "regulator"} else "观点不明"
+        )
     )
-    stance = (
-        f"{inst} 立场偏{direction}。"
+    handle = next((i.x_handle for i in cluster.items if i.x_handle), "")
+    who = f"{inst}" + (f"（@{handle}）" if handle else "")
+    default_conflict = (
         "潜在利益冲突：卖方可能有承销、做市或持仓（缺数据，不读取真实账户），且有持续发片惯性。"
     )
-    rec = (track or {}).get(inst) or (track or {}).get("ratings") or {}
+    acct_conflicts = getattr(account, "conflicts", "") if account is not None else ""
+    conflicts = acct_conflicts or default_conflict
+    stance = f"{who} 立场偏{direction}。{conflicts}"
+    rec = (track or {}).get(inst) or (track or {}).get(handle) or (track or {}).get("ratings") or {}
     hits = rec.get("hits")
     misses = rec.get("misses")
     if hits is None and misses is None:
@@ -213,6 +224,10 @@ def review_institution(
         assumptions = "核心假设含目标价/倍数；若无假设明细，目标价本身不能当事实。"
     consensus = "缺数据：无该标的一致预期样本，无法判断是否已在预期内。"
     counter = "最强反方：卖方观点常滞后于价格，可能是交易需求或关系维护，而非增量信息；三级不能单独构成事实。"
+    holdings_note = "缺数据：无已核对的公开持仓快照（不编造 13F 明细，不写数量）。"
+    raw_holdings = list(getattr(account, "known_holdings", None) or []) if account is not None else []
+    if raw_holdings:
+        holdings_note = "已知公开持仓代码：" + "、".join(str(x) for x in raw_holdings) + "（无数量，非真实账户）。"
     return InstitutionReview(
         institution=inst,
         institution_stance=stance,
@@ -220,6 +235,8 @@ def review_institution(
         key_assumptions=assumptions,
         consensus_gap=consensus,
         counter_view=counter,
+        known_holdings=holdings_note,
+        conflicts=conflicts,
     )
 
 

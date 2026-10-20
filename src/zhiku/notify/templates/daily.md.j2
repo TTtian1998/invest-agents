@@ -53,6 +53,17 @@
 {% endfor %}
 {% endif %}
 
+{% set nws = daily.news %}
+{% if nws %}
+{% with news = nws %}
+{% include "_event.md.j2" %}
+{% include "_kol.md.j2" %}
+{% endwith %}
+{% else %}
+## 大V动态
+无
+{% endif %}
+
 ## 舆情分析摘要
 {% set nws = daily.news %}
 {% if nws and nws.analyses %}

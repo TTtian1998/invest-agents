@@ -25,5 +25,11 @@
   - 核心假设：{{ a.institution_review.key_assumptions }}
   - 与一致预期缺口：{{ a.institution_review.consensus_gap }}
   - 反方：{{ a.institution_review.counter_view }}
+{% if a.institution_review.known_holdings %}
+  - 已知持仓：{{ a.institution_review.known_holdings }}
+{% endif %}
+{% if a.institution_review.conflicts %}
+  - 利益关系：{{ a.institution_review.conflicts }}
+{% endif %}
 {% endif %}
 {% endfor %}
