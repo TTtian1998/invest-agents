@@ -102,8 +102,14 @@ def build_fundamentals(
     spots = _spot_map(store, asof)
     start = asof - timedelta(days=400)
     bars = store.bars(symbols, start=start, end=asof, adjust="qfq")
+    raw_bars = store.bars(symbols, start=asof - timedelta(days=40), end=asof, adjust="none")
     close_panel = (
         bars.pivot(index="date", columns="symbol", values="close") if not bars.empty else pd.DataFrame()
+    )
+    raw_close_panel = (
+        raw_bars.pivot(index="date", columns="symbol", values="close")
+        if not raw_bars.empty
+        else pd.DataFrame()
     )
     amt_panel = (
         bars.pivot(index="date", columns="symbol", values="amount") if not bars.empty else pd.DataFrame()
@@ -133,6 +139,7 @@ def build_fundamentals(
         income_h = store.statements_history(symbol, "income", asof)
         balance_h = store.statements_history(symbol, "balance", asof)
         closes = close_panel[symbol] if symbol in close_panel.columns else None
+        raw_closes = raw_close_panel[symbol] if symbol in raw_close_panel.columns else None
         amounts = amt_panel[symbol] if symbol in amt_panel.columns else None
         div_df = store.dividends_asof(symbol, asof)
         ex_dates: list[date] = []
@@ -176,6 +183,7 @@ def build_fundamentals(
             div_yield=div_yield,
             shares_issued=_shares_issued(balance_h),
             market=market if isinstance(market, Market) else Market.CN,
+            raw_closes=raw_closes,
         )
         rows.append(row)
     rows = attach_percentiles(rows)

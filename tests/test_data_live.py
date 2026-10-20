@@ -255,6 +255,48 @@ def test_resume_skips_missing_bars(tmp_path: Path) -> None:
     assert n2 == n1
 
 
+def test_nan_delist_is_not_risk() -> None:
+    row = snapshot_from_store(
+        symbol="600519",
+        asof=date(2026, 10, 20),
+        listing={"name": "示例白酒", "instrument": "stock", "st": 0, "delist_date": float("nan")},
+        statements={},
+        prev_income=None,
+        prev_balance=None,
+        spot=None,
+        closes=None,
+        amounts=None,
+        div_years=None,
+        div_yield=None,
+        shares_issued=None,
+    )
+    assert row.st is False
+    assert row.delist_risk is False
+    st_row = snapshot_from_store(
+        symbol="000001",
+        asof=date(2026, 10, 20),
+        listing={"name": "*ST示例", "instrument": "stock", "st": 0},
+        statements={},
+        prev_income=None,
+        prev_balance=None,
+        spot=None,
+        closes=None,
+        amounts=None,
+        div_years=None,
+        div_yield=None,
+        shares_issued=None,
+    )
+    assert st_row.st is True
+
+
+def test_empty_picks_fail_gate() -> None:
+    idx = pd.to_datetime(["2025-01-31", "2025-02-28"])
+    prices = pd.DataFrame({"AAA": [10.0, 11.0]}, index=idx)
+    result = backtest_screen(prices, [], BacktestSettings(), screen="greenblatt")
+    assert result.passed_gate is False
+    assert any("空" in n for n in result.notes)
+
+
 def test_missing_not_interpolated() -> None:
     assert pick_num({"营业利润": "-"}, "ebit") is None
     assert ebit_of({}) is None

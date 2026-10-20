@@ -50,6 +50,18 @@ def backtest_screen(
     limit_up: pd.DataFrame | None = None,
     limit_down: pd.DataFrame | None = None,
 ) -> BacktestResult:
+    if not picks:
+        return BacktestResult(
+            screen=screen,
+            annualized=None,
+            max_drawdown=None,
+            sharpe=None,
+            win_rate=None,
+            turnover=None,
+            notes=["选股结果为空，无法回测"],
+            passed_gate=False,
+            engine="pandas",
+        )
     panel = prices
     if delist:
         from zhiku.events.pit import drop_survivors
@@ -70,17 +82,17 @@ def backtest_screen(
         if len(b) >= 2:
             bench_nav = b / float(b.iloc[0])
     engine = "pandas"
-    notes: list[str] = []
+    gate_notes: list[str] = []
     if vectorbt_available():
         engine = "pandas+vectorbt"
-        notes.append("已检测到 vectorbt，净值仍按月度等权再平衡计算以便与无 extra 时对齐。")
+        gate_notes.append("已检测到 vectorbt，净值仍按月度等权再平衡计算以便与无 extra 时对齐。")
     else:
-        notes.append("未安装 [backtest] extra，使用内置 pandas 月度等权再平衡。")
-    notes.append(
+        gate_notes.append("未安装 [backtest] extra，使用内置 pandas 月度等权再平衡。")
+    gate_notes.append(
         "财务截面须按公告日对齐（zhiku.events.pit.load_asof_universe）；价格面板按退市日截断，避免幸存者偏差。"
     )
     if limit_up is not None or limit_down is not None:
-        notes.append("涨停不可买入、跌停不可卖出；成本与滑点按换手从净值扣除。")
+        gate_notes.append("涨停不可买入、跌停不可卖出；成本与滑点按换手从净值扣除。")
     result = summarize_nav(
         nav,
         turnover=turnover,
@@ -90,7 +102,7 @@ def backtest_screen(
         screen=screen,
         engine=engine,
     )
-    result.notes = notes
+    result.notes = gate_notes
     result.passed_gate = _gate(result, settings)
     return result
 

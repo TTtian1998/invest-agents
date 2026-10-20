@@ -191,6 +191,51 @@ def amount_avg(amounts: pd.Series, window: int = 20) -> float | None:
     return float(s.iloc[-window:].mean())
 
 
+def _is_null(value: Any) -> bool:
+    if value is None:
+        return True
+    try:
+        if pd.isna(value):
+            return True
+    except Exception:
+        if value != value:  # NaN
+            return True
+    if isinstance(value, str) and value.strip().lower() in {"", "none", "nan", "nat"}:
+        return True
+    return False
+
+
+def flag_bool(value: Any) -> bool:
+    if _is_null(value):
+        return False
+    if isinstance(value, str) and value.strip().lower() in {"0", "false", "no"}:
+        return False
+    try:
+        if float(value) == 0:
+            return False
+    except (TypeError, ValueError):
+        pass
+    return bool(value)
+
+
+def is_st_label(name: Any, symbol: str = "") -> bool:
+    """仅识别 ST / *ST / S*ST 前缀，避免代码或简称里偶然出现的字母。"""
+    text = str(name or "").upper().replace(" ", "")
+    code = str(symbol or "").upper()
+    if text.startswith("*ST") or text.startswith("S*ST") or text.startswith("ST"):
+        return True
+    return code.startswith("ST") or code.startswith("*ST")
+
+
+def _as_ratio(value: float | None) -> float | None:
+    """报表里 ROE/负债率常为百分数。|x|>1 视为百分数，不把 0.15 再除 100。"""
+    if value is None:
+        return None
+    if abs(value) > 1:
+        return value / 100.0
+    return value
+
+
 def snapshot_from_store(
     *,
     symbol: str,
@@ -206,6 +251,7 @@ def snapshot_from_store(
     div_yield: float | None,
     shares_issued: bool | None,
     market: Market = Market.CN,
+    raw_closes: pd.Series | None = None,
 ) -> Fundamentals:
     income = (statements.get("income") or {}).get("payload")
     balance = (statements.get("balance") or {}).get("payload")
@@ -217,8 +263,10 @@ def snapshot_from_store(
     if amount is None and amounts is not None:
         amount = amount_avg(amounts)
     last_close = None
-    if closes is not None and not closes.dropna().empty:
-        last_close = float(closes.dropna().astype(float).iloc[-1])
+    # 估值用未复权价；前复权只用于动量/波动，避免 qfq 基数把 PE 拉飞
+    px = raw_closes if raw_closes is not None else None
+    if px is not None and not px.dropna().empty:
+        last_close = float(px.dropna().astype(float).iloc[-1])
     ni = pick_num(income, "net_income")
     assets = pick_num(balance, "total_assets")
     equity = pick_num(balance, "equity")
@@ -237,14 +285,12 @@ def snapshot_from_store(
     ato_prev = ratio(pick_num(prev_income, "revenue"), pick_num(prev_balance, "total_assets"))
     roe = ratio(ni, equity)
     if roe is None:
-        rp = pick_num(income, "roe_pct")
-        if rp is not None:
-            roe = rp / 100.0 if rp > 1 else rp
+        roe = _as_ratio(pick_num(income, "roe_pct"))
     debt_asset = ratio(pick_num(balance, "total_liab"), assets)
     if debt_asset is None:
-        da = pick_num(balance, "debt_asset_pct") or pick_num(income, "debt_asset_pct")
-        if da is not None:
-            debt_asset = da / 100.0 if da > 1 else da
+        debt_asset = _as_ratio(
+            pick_num(balance, "debt_asset_pct") or pick_num(income, "debt_asset_pct")
+        )
     ebit = ebit_of(income)
     nwc = nwc_of(balance)
     nfa = nfa_of(balance)
@@ -258,7 +304,7 @@ def snapshot_from_store(
         pb = last_close / bps
     ev = ev_of(mktcap, balance)
     name = (spot or {}).get("name") or listing.get("name") or ""
-    st = bool(listing.get("st")) or "ST" in str(name).upper()
+    st = flag_bool(listing.get("st")) or is_st_label(name, symbol)
     mom = momentum_12_1(closes) if closes is not None else None
     vol = realized_vol(closes) if closes is not None else None
     gm3 = [x for x in (gm_prev, gm) if x is not None]
@@ -270,7 +316,7 @@ def snapshot_from_store(
         industry=str(listing.get("industry") or ""),
         instrument=str(listing.get("instrument") or "stock"),
         st=st,
-        delist_risk=bool(listing.get("delist_date")),
+        delist_risk=not _is_null(listing.get("delist_date")),
         mktcap=mktcap,
         amount_avg=amount,
         pe=pe,
