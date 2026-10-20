@@ -33,9 +33,38 @@ flowchart TD
   macro --> hitrate
 ```
 
+## 真实数据路径
+
+```mermaid
+flowchart LR
+  subgraph sources [源]
+    ak[akshare 东财整表]
+    bs[baostock 子进程日线]
+    yf[yfinance 港美]
+    ts[tushare 可选]
+  end
+  subgraph kb [ZHIKU_KB 不进 git]
+    sqlite[(data/market.sqlite)]
+    pq[data/bars parquet]
+    qlib[data/qlib bin]
+    models[models/*.pkl]
+  end
+  ak --> sqlite
+  bs --> sqlite
+  yf --> sqlite
+  ts --> sqlite
+  sqlite --> pq
+  sqlite --> qlib
+  qlib --> models
+  sqlite --> dailyLive[zk --provider live daily]
+  models --> dailyLive
+```
+
+启动：`zk data sync`（默认中证800、3 年、可 `--resume` / `--workers`）→ `zk factor prepare` → `zk factor train` → `zk --provider live daily`。fixture 模式仍读 `examples/fixtures`，不碰本地库。
+
 ## 包布局
 
-- `zhiku/data`：`zk data sync` 增量落地到 `ZHIKU_KB/data`（列表、指数成分、前复权/不复权日线、三张报表+公告日）。缺字段记 `MissingData`，不插值、不进 git。
+- `zhiku/data`：`zk data sync` 增量落地到 `ZHIKU_KB/data`（列表、指数成分、前复权/不复权日线、三张报表+公告日、整表分红）。缺字段记 `MissingData`，不插值、不进 git。baostock 走独立进程，超时 kill，避免把登录连接挂死。
 - `zhiku/screens`：Greenblatt / Piotroski / 低估值高分红 / 质量+动量，以及质量门槛。
 - `zhiku/factors`：本地库 → qlib bin；Alpha158+LightGBM（无 pyqlib 则 pandas 特征+LGB）；没模型日报写「未训练」。
 - `zhiku/backtest`：live 用本地库价格；成本/滑点；涨停不可买、跌停不可卖；公告日 PIT + 退市截断。

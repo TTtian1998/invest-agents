@@ -98,24 +98,35 @@ zk --provider live daily --date 2026-10-20
 ```bash
 export ZHIKU_KB=/path/to/your-kb          # 仓库外；不要放真实持仓
 uv pip install -e ".[dev]"
-# 可选：uv pip install -e ".[qlib]"       # Alpha158；没有则 pandas+LightGBM
-zk data sync --universe csi800 --years 3  # 首次中证800约十几分钟到一小时（视限流）
-# 全市场：zk data sync --universe all --years 3   # 可能数小时，可 Ctrl+C 后加 --resume 续传
+# 可选：uv pip install -e ".[qlib]"       # pyqlib Alpha158；没有则 pandas+LightGBM
+# 日线备用源：pip install baostock        # 东财 hist 常熔断时走 baostock 子进程
+zk data sync --universe csi800 --years 3 --workers 4
+# 全市场：zk data sync --universe all --years 3
+# 中断后续传：同一 ZHIKU_KB 再跑（默认 --resume）；挂死标的记 missing，不插值
 zk factor prepare
 zk factor train
 zk --provider live daily --date 2026-10-20
-zk --provider live backtest greenblatt
+zk --provider live backtest multifactor
 ```
 
-- A 股：列表（含 ST、停牌、上市/退市日）、沪深300/中证500/中证1000/科创50/中证800 成分、前复权+不复权日线（成交额/换手）、利润表/资产负债表/现金流量表（带**公告日**，PIT 对齐）。
-- 港美：可配置恒生、恒生科技、标普500、纳指100 成分的日线与主要财务（yfinance；yfinance 无公告日时记缺数据，不用报告期冒充）。
-- 主源 akshare，备用 baostock / tushare（`TUSHARE_TOKEN`）。任何字段拿不到就「缺数据」，不插值。
-- 回测用本地库历史价，加交易成本，涨停不可买入、跌停不可卖出。
+- A 股：列表（含 ST、停牌、上市/退市日）、沪深300/中证500/中证1000/科创50/中证800 成分、前复权+不复权日线（成交额/换手）、利润表/资产负债表/现金流量表（带**公告日**，PIT 对齐）、整表分红。
+- 港美：`--include-global` 时按配置拉恒生、恒生科技、标普500、纳指100 成分的日线与主要财务（yfinance 无公告日则记缺数据）。
+- 主源 akshare，日线备用 baostock 子进程（18s 超时 terminate）/ tushare（`TUSHARE_TOKEN`）。任何字段拿不到就「缺数据」，不插值。
+- live 回测用本地库历史价，加交易成本，涨停不可买入、跌停不可卖出。
 - 没训练模型时日报写 **未训练**，只用公式分。
 
-首次同步耗时取决于数据源限流：本仓库开发机上中证800、近 3 年日线+财报通常需要 **20–90 分钟**；A 股全市场可能 **数小时**。中断后同一 `ZHIKU_KB` 再跑会跳过已完成标的。
+**首次同步耗时（本仓库云主机实测，中证800、近 3 年，跳过港美）：**
 
-配置见 `config/data_sync.example.yaml`，写入 `ZHIKU_KB/config/pipeline.yaml` 的 `data:` 段。
+| 步骤 | 耗时 | 结果 |
+| --- | --- | --- |
+| `zk data sync --universe csi800 --years 3 --workers 4 --skip-global` | 约 **40–70 分钟**（东财 hist 挂死后改 baostock；含一次断点续传共 4093s） | 成分 800，qfq 日线 798/801，不复权 800/801，整表财报 48/48 期，分红 12 期 |
+| `zk factor prepare` | ~5s | 799 个 qlib bin |
+| `zk factor train` | ~5s | pandas+LightGBM（未装 pyqlib，不是 Alpha158） |
+| `zk --provider live daily --date 2026-10-20` | ~16s | 股票池 801，缺数据约 9% |
+
+A 股全市场（`--universe all`）未在本机跑通，预计数小时，请用 `--resume`。东财日线接口在部分网络会连续失败，同步会熔断改 baostock。科创板/创业板涨跌停阈值按代码识别，ST 只认名称或代码前缀，不把 NaN 退市日当成 ST。
+
+东财整表利润表没有营业利润/流动资产/固定资产时，Greenblatt 与 Piotroski 会因缺字段为空（不编造）；多因子仍可用 ROE/动量。配置见 `config/data_sync.example.yaml`。
 
 ## 命令
 

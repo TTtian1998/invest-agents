@@ -15,8 +15,21 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "ebit": ("息税前利润", "EBIT", "Operate Profit", "OPERATE_PROFIT", "营业利润"),
     "interest": ("利息费用", "Interest Expense", "INTEREST_EXPENSE", "财务费用"),
     "total_profit": ("利润总额", "Pretax Income", "TOTAL_PROFIT", "税前利润"),
-    "net_income": ("净利润", "Net Income", "NETPROFIT", "归母净利润", "归属于母公司股东的净利润"),
-    "revenue": ("营业总收入", "营业收入", "Total Revenue", "OPERATE_INCOME", "营业收入"),
+    "net_income": (
+        "净利润",
+        "净利润-净利润",
+        "Net Income",
+        "NETPROFIT",
+        "归母净利润",
+        "归属于母公司股东的净利润",
+    ),
+    "revenue": (
+        "营业总收入",
+        "营业总收入-营业总收入",
+        "营业收入",
+        "Total Revenue",
+        "OPERATE_INCOME",
+    ),
     "cogs": ("营业成本", "Cost Of Revenue", "OPERATE_COST"),
     "gross_margin_pct": ("毛利率", "GROSS_MARGIN"),
     "ocf": (

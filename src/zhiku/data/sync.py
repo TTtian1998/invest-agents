@@ -286,7 +286,22 @@ def _sync_bulk_financials(
                 store.upsert_listings(names)
             store.set_state(job, "*", last_ok=end, status="ok")
             got += 1
-    report.notes.append(f"整表财报完成 {got}/{len(periods)*4} 次")
+        div_job = f"bulk:div:{period.isoformat()}"
+        if resume and store.last_ok(div_job, "*") is not None:
+            got += 1
+            continue
+        _log(progress, f"整表分红 {period}")
+        raw_div = timed_call(fetcher.bulk_dividends, 90, period, field="bulk:div")
+        if isinstance(raw_div, MissingData):
+            if "未提供整表分红" not in (raw_div.reason or ""):
+                store.log_missing(None, div_job, period, raw_div.reason)
+                store.set_state(div_job, "*", last_ok=None, status="missing", error=raw_div.reason)
+                report.missing += 1
+        else:
+            store.upsert_dividends(raw_div)
+            store.set_state(div_job, "*", last_ok=end, status="ok")
+            got += 1
+    report.notes.append(f"整表财报完成 {got}/{len(periods)*5} 次")
     return got > 0
 
 

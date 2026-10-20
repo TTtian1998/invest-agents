@@ -109,6 +109,9 @@ class MarketFetcher:
     def bulk_financials(self, period: date, kind: str) -> list[dict] | MissingData:
         return MissingData("未提供整表财务")
 
+    def bulk_dividends(self, period: date) -> list[dict] | MissingData:
+        return MissingData("未提供整表分红")
+
 
 _EM_HIST_FAILS = 0
 _EM_HIST_SKIP_AFTER = 3
@@ -374,6 +377,34 @@ class AkshareFetcher(MarketFetcher):
             return raw
         return _bulk_statements(raw, stmt_kind, period)
 
+    def bulk_dividends(self, period: date) -> list[dict] | MissingData:
+        date_s = period.strftime("%Y%m%d")
+        raw = self._ak(["stock_fhps_em"], date=date_s, field="bulk:div")
+        if isinstance(raw, MissingData):
+            return raw
+        if raw is None or getattr(raw, "empty", True):
+            return MissingData(f"整表分红为空 {period}")
+        code_col = _col(raw, "代码", "股票代码", "code")
+        ex_col = _col(raw, "除权除息日", "除息日", "ex_date")
+        ann_col = _col(raw, "预案公告日", "最新公告日期", "公告日期", "announced")
+        amt_col = _col(raw, "现金分红-现金分红比例", "现金分红", "派息", "amount")
+        if code_col is None or ex_col is None:
+            return MissingData("整表分红缺代码或除权日")
+        rows: list[dict] = []
+        for _, row in raw.iterrows():
+            ex = _as_date(row[ex_col])
+            if ex is None:
+                continue
+            rows.append(
+                {
+                    "symbol": normalize_cn(str(row[code_col])),
+                    "ex_date": ex,
+                    "announced": _as_date(row[ann_col]) if ann_col else ex,
+                    "amount": _num(row[amt_col]) if amt_col else None,
+                }
+            )
+        return rows or MissingData(f"整表分红无行 {period}")
+
     def cn_statement(self, symbol: str, kind: str) -> list[dict] | MissingData:
         code = em_code(symbol)
         names = {
@@ -450,7 +481,9 @@ class AkshareFetcher(MarketFetcher):
 
 _BULK_MAP = {
     "净利润": "净利润",
+    "净利润-净利润": "净利润",
     "营业总收入": "营业总收入",
+    "营业总收入-营业总收入": "营业总收入",
     "营业利润": "营业利润",
     "利润总额": "利润总额",
     "营业总支出-财务费用": "利息费用",
