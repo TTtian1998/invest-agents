@@ -1,4 +1,4 @@
-# 默认关闭冲击。测试应急流程时把 vix_change 调到阈值以上。
-vix_change: 0.02
-index_intraday: -0.004
-note: 虚构日常波动，不触发应急。另见 tests 内构造的冲击样本。
+# 虚构演示冲击，供看板展示应急模式。不是真实市场数据。
+vix_change: 0.25
+index_intraday: -0.04
+note: 离线 demo 用的虚构 VIX/指数冲击，触发应急清单与禁加。

@@ -25,6 +25,66 @@ def _load_daily(paths: Paths) -> dict | None:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _emergency_panel(news: dict | None) -> None:
+    """应急模式始终可见：未触发也写明状态，避免产品页空白。"""
+    st.subheader("应急模式")
+    em = (news or {}).get("emergency") or {}
+    if em.get("active"):
+        st.error("应急模式已开启：" + "；".join(em.get("reasons") or []))
+        st.write("应对清单：")
+        for p in em.get("playbook") or []:
+            st.write(f"- {p}")
+        if em.get("affected"):
+            st.caption(
+                "受影响持仓代码："
+                + "、".join(em.get("affected") or [])
+                + "（不展示数量/成本）"
+            )
+        if em.get("hedges"):
+            st.write("对冲工具（示意，无账户权限推断）：")
+            for h in em.get("hedges") or []:
+                st.write(f"- {h}")
+        if em.get("freeze_adds"):
+            st.warning("触发线与新开仓：禁加")
+    else:
+        st.info("当前未进入应急模式（VIX / 指数盘中跌幅 / 多源冲突关键词均未超阈值）。")
+        playbook = em.get("playbook") or [
+            "先降风险，不扩大暴露",
+            "不抄底",
+            "等官方表态",
+            "列出受影响持仓代码（不输出数量/成本）和对冲工具",
+        ]
+        st.caption("预设应对清单（触发后自动带出）：")
+        for p in playbook:
+            st.write(f"- {p}")
+
+
+def _frame(df: pd.DataFrame, **kwargs):
+    n = len(df.index) if df is not None else 0
+    height = min(38 + 36 * max(n, 1), 720)
+    st.dataframe(df, hide_index=True, use_container_width=True, height=height, **kwargs)
+
+
+def _crowding_panel(news: dict | None) -> None:
+    st.subheader("拥挤度（反身性）")
+    crowd = (news or {}).get("crowding_stats") or {}
+    if crowd:
+        rows = []
+        for bucket, stats in crowd.items():
+            rows.append(
+                {
+                    "分组": bucket,
+                    "样本": stats.get("n"),
+                    "T+1胜率": stats.get("winrate_t1"),
+                    "T+5胜率": stats.get("winrate_t5"),
+                }
+            )
+            _frame(pd.DataFrame(rows))
+        st.caption("拥挤时好消息标「利好出尽风险」并降权；冷清加权。缺拥挤输入写缺数据，不编造。")
+    else:
+        st.info("缺数据：还没有按拥挤度分组的事件研究样本。")
+
+
 def _examples_kb() -> Path | None:
     here = Path(__file__).resolve()
     cand = here.parents[3] / "examples" / "kb"
@@ -59,6 +119,7 @@ def main() -> None:
             "大V动态",
             "多空机会",
             "宏观与事件",
+            "应急与拥挤",
             "触发线风控",
             "每周命中率",
         ]
@@ -69,17 +130,20 @@ def main() -> None:
             st.info("还没有每日报告。请先运行 `zk --provider fixture daily --date 2026-10-20`。")
         else:
             st.write(f"截面日期：**{daily.get('asof')}**")
-            for note in daily.get("notes") or []:
-                st.caption(note)
             rows = daily.get("candidates") or []
             if rows:
                 df = pd.DataFrame(rows)
                 show = df[
                     ["symbol", "name", "total", "formula_score", "qlib_score", "source"]
                 ].copy()
-                st.dataframe(show, hide_index=True, use_container_width=True)
+                _frame(show)
             else:
                 st.warning("今日无候选。")
+            notes = daily.get("notes") or []
+            if notes:
+                with st.expander("运行备注"):
+                    for note in notes:
+                        st.caption(note)
             rejected = daily.get("quality_rejected") or []
             if rejected:
                 with st.expander("未过优质门槛"):
@@ -120,9 +184,14 @@ def main() -> None:
                     "最大回撤",
                     "缺数据" if bt.get("max_drawdown") is None else f"{bt['max_drawdown']:.2%}",
                 )
-                cols[2].metric(
-                    "夏普", "缺数据" if bt.get("sharpe") is None else f"{bt['sharpe']:.2f}"
-                )
+                sharpe = bt.get("sharpe")
+                if sharpe is None:
+                    sharpe_s = "缺数据"
+                elif abs(float(sharpe)) > 10:
+                    sharpe_s = f"{float(sharpe):.1f}（样本短）"
+                else:
+                    sharpe_s = f"{float(sharpe):.2f}"
+                cols[2].metric("夏普", sharpe_s)
                 cols[3].metric(
                     "胜率", "缺数据" if bt.get("win_rate") is None else f"{bt['win_rate']:.1%}"
                 )
@@ -144,19 +213,7 @@ def main() -> None:
             )
             em = news.get("emergency") or {}
             if em.get("active"):
-                st.error("应急模式：" + "；".join(em.get("reasons") or []))
-                for p in em.get("playbook") or []:
-                    st.write(f"- {p}")
-                if em.get("affected"):
-                    st.caption(
-                        "受影响持仓代码："
-                        + "、".join(em.get("affected") or [])
-                        + "（不展示数量/成本）"
-                    )
-            crowd = news.get("crowding_stats") or {}
-            if crowd:
-                st.caption("拥挤度分组事件研究")
-                st.json(crowd)
+                st.error("应急模式：" + "；".join(em.get("reasons") or []) + "（详见「应急与拥挤」）")
             for a in news.get("analyses") or []:
                 st.subheader(a.get("subject") or "")
                 st.caption(a.get("source_grade_label") or "")
@@ -166,7 +223,9 @@ def main() -> None:
                 st.write(f"**是否消化** {a.get('priced_in')}")
                 st.write(f"**影响** {a.get('impact')}")
                 st.write(f"**反方** {a.get('counter_view')}")
-                st.write(f"**下一验证** {a.get('next_check')} ｜置信度 {a.get('confidence')}")
+                conf = a.get("confidence")
+                conf_s = f"{conf:.2f}" if isinstance(conf, (int, float)) else str(conf or "缺数据")
+                st.write(f"**下一验证** {a.get('next_check')} ｜置信度 {conf_s}")
                 if a.get("institution_review"):
                     st.json(a["institution_review"])
             with st.expander("信源分级一览"):
@@ -213,13 +272,11 @@ def main() -> None:
                     }
                     for p in feed
                 ]
-                st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+                _frame(pd.DataFrame(rows))
             hits = news.get("x_hits") or {}
             if hits.get("accounts"):
                 st.subheader("账号命中率（动态权重）")
-                st.dataframe(
-                    pd.DataFrame(hits["accounts"]), hide_index=True, use_container_width=True
-                )
+                _frame(pd.DataFrame(hits["accounts"]))
 
     with tabs[5]:
         if not news:
@@ -251,11 +308,7 @@ def main() -> None:
                         )
                         if rows and c in rows[0]
                     ]
-                    st.dataframe(
-                        pd.DataFrame(rows)[show_cols] if show_cols else pd.DataFrame(rows),
-                        hide_index=True,
-                        use_container_width=True,
-                    )
+                    _frame(pd.DataFrame(rows)[show_cols] if show_cols else pd.DataFrame(rows))
                     st.caption(
                         "失效条件与时间止损见 invalidation / time_stop_on。已过时或应急禁加会降为只观察。"
                     )
@@ -272,17 +325,13 @@ def main() -> None:
             st.write("未来 7 天")
             cal = macro.get("calendar_7d") or []
             if cal:
-                st.dataframe(pd.DataFrame(cal), hide_index=True, use_container_width=True)
+                _frame(pd.DataFrame(cal))
             else:
                 st.write("缺数据")
             st.write("已发布预期差")
-            st.dataframe(
-                pd.DataFrame(macro.get("released") or []), hide_index=True, use_container_width=True
-            )
+            _frame(pd.DataFrame(macro.get("released") or []))
             st.write("锚定资产")
-            st.dataframe(
-                pd.DataFrame(macro.get("anchors") or []), hide_index=True, use_container_width=True
-            )
+            _frame(pd.DataFrame(macro.get("anchors") or []))
             for a in macro.get("analyses") or []:
                 st.subheader(a.get("subject") or "")
                 if a.get("mark"):
@@ -293,6 +342,20 @@ def main() -> None:
                 st.json(macro["chains_fired"])
 
     with tabs[7]:
+        if not news:
+            st.info("还没有舆情报告。请先运行 `zk --provider fixture news --date 2026-10-20`。")
+        else:
+            _emergency_panel(news)
+            _crowding_panel(news)
+            notes = [
+                c.get("crowding_note")
+                for c in news.get("clusters") or []
+                if c.get("crowding_note")
+            ]
+            if notes:
+                st.caption("标的拥挤备注（虚构样本）：" + "；".join(dict.fromkeys(notes)))
+
+    with tabs[8]:
         st.write("读取 `ZHIKU_KB` 下的规则与持仓；若不存在则回退到仓库内虚构示例。")
         rule_paths = paths
         source = "ZHIKU_KB"
@@ -301,10 +364,10 @@ def main() -> None:
             if example is not None:
                 rule_paths = Paths.load(kb=example, fixtures=example.parent / "fixtures")
                 source = "examples（虚构）"
-        st.caption(f"当前规则来源：{source} @ {rule_paths.kb}")
+        st.caption(f"当前规则来源：{source}（示例知识库，非真实账户）")
         try:
             books = load_symbol_books(rule_paths.rules)
-            st.dataframe(
+            _frame(
                 pd.DataFrame(
                     [
                         {
@@ -316,9 +379,7 @@ def main() -> None:
                         }
                         for b in books
                     ]
-                ),
-                hide_index=True,
-                use_container_width=True,
+                )
             )
         except (RulesSchemaError, FileNotFoundError) as exc:
             st.error(str(exc))
@@ -336,14 +397,15 @@ def main() -> None:
                 snap = ExposureGuard(rule_paths.exposure_state).evaluate(
                     portfolio, quotes, persist=False, asof=now_shanghai().date()
                 )
-                st.write(f"成长仓状态：**{snap.status}** 占比 {snap.ratio}")
+                ratio_s = f"{snap.ratio:.1%}" if snap.ratio is not None else "缺数据"
+                st.write(f"成长仓状态：**{snap.status}** 占比 {ratio_s}")
                 blocked = [p.symbol for p in snap.positions if p.add_blocked]
                 if blocked:
                     st.warning("禁加: " + ", ".join(blocked))
             except RulesSchemaError as exc:
                 st.error(str(exc))
 
-    with tabs[8]:
+    with tabs[9]:
         events = EventLog(paths.events).read() if paths.events.is_file() else []
         if not events:
             example = _examples_kb()
@@ -362,7 +424,7 @@ def main() -> None:
             week = review_week(events, provider, end)
             st.write(f"{week.start} — {week.end}")
             if week.groups:
-                st.dataframe(
+                _frame(
                     pd.DataFrame(
                         [
                             {
@@ -375,18 +437,16 @@ def main() -> None:
                             }
                             for g in week.groups
                         ]
-                    ),
-                    hide_index=True,
-                    use_container_width=True,
+                    )
                 )
             for lesson in week.lessons:
                 st.caption(lesson)
+            if news and news.get("crowding_stats"):
+                _crowding_panel(news)
             x_hits = (news or {}).get("x_hits") if news else None
             if x_hits and x_hits.get("accounts"):
                 st.subheader("大V命中率")
-                st.dataframe(
-                    pd.DataFrame(x_hits["accounts"]), hide_index=True, use_container_width=True
-                )
+                _frame(pd.DataFrame(x_hits["accounts"]))
 
 
 if __name__ == "__main__":
