@@ -1,0 +1,38 @@
+# 每周命中率 {{ review.start }} — {{ review.end }}
+
+- 时区：Asia/Shanghai
+- 数据源：`{{ provider }}`
+- 知识库：`{{ kb }}`
+- 窗口：周一到周五；T+1 / T+3 取对应市场交易日收盘
+
+## 分组命中率（按 T+1）
+
+{% for g in review.groups %}
+- 市场 {{ g.market }} / 规则类型 `{{ g.rule_type }}`
+  - 样本 {{ g.total }}；兑现 {{ g.hit }}；误报 {{ g.false_alarm }}；中性 {{ g.neutral }}；待定 {{ g.pending }}
+  - 命中率：{{ "%.1f%%"|format(g.hit_rate * 100) if g.hit_rate is not none else "缺数据" }}
+{% endfor %}
+{% if not review.groups %}
+本周无触发事件。
+{% endif %}
+
+## 事件明细
+
+{% for rec in review.records %}
+- `{{ rec.event.date }}` {{ rec.event.symbol }} 规则 `{{ rec.event.rule_id }}`
+  - 触发价 {{ rec.event.trigger_price }} / 有效线 {{ rec.event.effective_level }} / 动作 `{{ rec.event.action.type }}`
+  {% for o in rec.outcomes %}
+  - T+{{ o.horizon }}（{{ o.on if o.on else "缺数据" }}）：{{ o.label_cn }}{% if o.close is not none %}，收盘 {{ o.close }}{% endif %}{% if o.missing %}，{{ o.missing }}{% endif %}
+  {% endfor %}
+{% endfor %}
+
+## 候选教训
+
+以下文本按规则生成，**不会自动写入**任何 CIO_LESSONS 文件，仅供人工取用。
+
+{% for lesson in review.lessons %}
+- {{ lesson }}
+{% endfor %}
+
+---
+研究与提醒工具，不构成投资建议，不自动下单。

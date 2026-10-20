@@ -1,0 +1,19 @@
+# 虚构示例：美股。价位、数量、成本均为编造。用于演示跳空合并。
+symbol: "AAPL"
+market: US
+name: 示例美股
+growth: true
+add_blocked: false
+position: {qty: 50, cost: 190.00}
+rules:
+  - id: aapl-line-a
+    when: {field: close, op: lt, level: 180.0}
+    action: {type: sell_qty, qty: 10}
+  - id: aapl-line-b-close
+    when: {field: close, op: lt, level: 170.0}
+    action: {type: sell_qty, qty: 20}
+    supersedes: [aapl-line-a]
+  - id: aapl-line-b-open
+    when: {field: open, op: lt, level: 170.0}
+    action: {type: sell_qty, qty: 20}
+    supersedes: [aapl-line-a]

@@ -1,0 +1,36 @@
+# 盘中检查 {{ on }} （14:55）
+
+- 时区：Asia/Shanghai
+- 数据源：`{{ provider }}`
+- 知识库：`{{ kb }}`
+
+{% if warnings %}
+## 警告
+{% for w in warnings %}
+- {{ w }}
+{% endfor %}
+{% endif %}
+
+{% for ev in evaluations if ev.visible %}
+## {{ ev.book.symbol }} {{ ev.book.name }}（{{ ev.book.market.value }}）
+{% if ev.book.add_blocked %}
+- **禁加**
+{% endif %}
+{% for s in ev.visible %}
+- 规则 `{{ s.rule_id }}`：**{{ s.status_cn }}**
+  - 实际值：{{ s.actual if s.actual is not none else "缺数据" }}
+  - 有效线：{{ s.effective_level if s.effective_level is not none else "缺数据" }}
+  - 价源：{{ s.price_source }}
+  - 时间：{{ s.asof }}
+  - 依据：{{ s.reason }}
+{% if s.sell_qty %}
+  - 建议卖出数量（虚构示例）：{{ s.sell_qty }}
+{% endif %}
+{% endfor %}
+{% if ev.merged_qty %}
+- 合并建议动作：卖出 {{ ev.merged_qty }}（取更大者；被覆盖规则不单独输出）
+{% endif %}
+{% endfor %}
+
+---
+研究与提醒工具，不构成投资建议，不自动下单。

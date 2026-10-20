@@ -1,0 +1,11 @@
+# 虚构示例：A 股个股。价位、数量、成本均为编造。
+symbol: "600519"
+market: CN
+name: 示例白酒个股
+growth: false
+add_blocked: false
+position: {qty: 10, cost: 1500.00}
+rules:
+  - id: demo-600519-1455
+    when: {field: price_1455, op: lt, level: 1400.0}
+    action: {type: sell_all}

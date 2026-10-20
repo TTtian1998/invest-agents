@@ -1,0 +1,30 @@
+# 用户自己的知识库与密钥：真实规则/持仓放在仓库外，用 ZHIKU_KB 指向
+/kb/
+*.local.yaml
+.env
+
+# 示例运行时生成的日志、缓存与报告
+examples/kb/journal/
+examples/kb/reports/
+examples/kb/cache/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/

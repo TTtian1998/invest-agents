@@ -1,0 +1,42 @@
+# 虚构示例持仓。数量、成本、汇率均为编造，不是任何真实账户。
+fx:
+  USD_CNY: 7.20
+  HKD_CNY: 0.92
+freeze_threshold: 0.60
+unfreeze_threshold: 0.50
+positions:
+  - symbol: "510300"
+    market: CN
+    name: 示例宽基ETF
+    qty: 10000
+    cost: 4.00
+    growth: false
+    add_blocked: true
+  - symbol: "600519"
+    market: CN
+    name: 示例白酒个股
+    qty: 10
+    cost: 1500.00
+    growth: false
+    add_blocked: false
+  - symbol: "AAPL"
+    market: US
+    name: 示例美股
+    qty: 20
+    cost: 190.00
+    growth: true
+    add_blocked: false
+  - symbol: "0700.HK"
+    market: HK
+    name: 示例港股
+    qty: 100
+    cost: 320.00
+    growth: true
+    add_blocked: false
+  - symbol: "2800.HK"
+    market: HK
+    name: 示例港股ETF
+    qty: 2000
+    cost: 20.00
+    growth: false
+    add_blocked: false

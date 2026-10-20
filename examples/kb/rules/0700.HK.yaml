@@ -1,0 +1,13 @@
+# 虚构示例：港股个股。价位、数量、成本均为编造。演示量比附加条件。
+symbol: "0700.HK"
+market: HK
+name: 示例港股
+growth: true
+add_blocked: false
+position: {qty: 100, cost: 320.00}
+rules:
+  - id: hk0700-vol
+    when: {field: close, op: lt, level: 300.0}
+    and:
+      - {field: volume_ratio, op: ge, level: 1.0}
+    action: {type: sell_fraction, fraction: 0.5}

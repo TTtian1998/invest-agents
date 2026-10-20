@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "zhiku"
+version = "0.1.0"
+description = "把价位触发线、14:55/收盘确认、成长仓上限和周五命中率复盘代码化的个人投研工具"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "invest-agents contributors" }]
+dependencies = [
+  "pydantic>=2.7",
+  "typer>=0.12",
+  "jinja2>=3.1",
+  "pyyaml>=6",
+  "pandas>=2.2",
+  "akshare>=1.19",
+  "yfinance>=1.7",
+  "tzdata",
+]
+
+[project.optional-dependencies]
+stats = ["quantstats>=0.0.86"]
+debate = ["tradingagents @ git+https://github.com/TauricResearch/TradingAgents@v0.7.0"]
+dev = ["pytest>=8", "pytest-cov", "ruff", "mypy"]
+
+[project.scripts]
+zk = "zhiku.cli:app"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/zhiku/notify/templates" = "zhiku/notify/templates"
+
+[tool.pytest.ini_options]
+addopts = "-m \"not network\""
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+  "network: 需要访问 akshare / yfinance 等在线行情的测试",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+check_untyped_defs = false
+allow_untyped_defs = true
+warn_unused_ignores = false
+pretty = true
+
+[tool.coverage.run]
+source = ["zhiku"]
+branch = true
