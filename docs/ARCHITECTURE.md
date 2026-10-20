@@ -25,9 +25,9 @@ flowchart TD
 
 - `zhiku/screens`：Greenblatt / Piotroski / 低估值高分红 / 质量+动量，以及质量门槛。
 - `zhiku/factors`：与 qlib 的可选衔接；未安装则分数为空。
-- `zhiku/backtest`：pandas 月度等权，vectorbt 可选。
+- `zhiku/backtest`：pandas 月度等权，vectorbt 可选；财务按公告日 PIT 对齐，价格按退市日截断。
 - `zhiku/news`：扫描、聚合、价量确认、**信源分级**、X 大V 跟踪、机会、分析层。
-- `zhiku/events`：预期差、新颖度/半衰期、拥挤度、产业链+地缘传导、失效/时间止损、黑天鹅协议、PIT 财务、只追加决策日志。
+- `zhiku/events`：预期差、新颖度/半衰期（历史事件研究估算）、拥挤度、产业链 YAML/CSV+地缘传导、失效/时间止损、黑天鹅协议、PIT 财务、只追加决策日志。应急模式对触发线禁加。
 - `zhiku/macro`：日历、预期差、事件剧本、传导链 YAML、事件窗口、利率近似。
 - `zhiku/analyze.py`：共享分析卡片；无 key 降级并标「未做深度分析」。
 - `zhiku/engine`：触发线与成长仓闸门；LLM 不进入。

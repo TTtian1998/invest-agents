@@ -138,6 +138,17 @@ def _apply_macro_windows(paths: Paths, on: date, provider_kind: str, evaluations
         emergency = Emergency.model_validate(news.emergency or {})
         expiries = expiry_alerts(paths.journal / "opportunities.jsonl", on)
         banners.extend(apply_event_discipline(evaluations, emergency=emergency, expiries=expiries))
+        from zhiku.events.log import DecisionLog
+
+        DecisionLog(paths.journal / "decisions.jsonl").append(
+            "trigger_judgment",
+            {
+                "asof": on.isoformat(),
+                "freeze_adds": bool(emergency.freeze_adds and emergency.active),
+                "expiry": [e.reason + " " + e.symbol for e in expiries],
+                "symbols": [getattr(ev.book, "symbol", "") for ev in (evaluations or [])],
+            },
+        )
     except Exception:  # noqa: BLE001
         pass
     return banners
@@ -228,6 +239,20 @@ def exposure_cmd(
     guard = ExposureGuard(paths.exposure_state)
     asof = on or now_shanghai().date()
     snap = guard.evaluate(portfolio, quotes, persist=True, asof=asof)
+    try:
+        from zhiku.events.models import Emergency
+        from zhiku.news.runner import run_news
+        from zhiku.pipeline.settings import load_pipeline_settings
+
+        settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
+        news = run_news(paths, asof, provider_kind=ctx.obj["provider_kind"], settings=settings)
+        emergency = Emergency.model_validate(news.emergency or {})
+        if emergency.active and emergency.freeze_adds:
+            snap.frozen = True
+            snap.status = "FROZEN"
+            snap.notes.append("应急模式：禁加")
+    except Exception:  # noqa: BLE001
+        pass
     md = render("exposure.md.j2", on=asof.isoformat(), snap=snap)
     out = write_report(paths.reports, asof, "exposure", md)
     typer.echo(md)
@@ -255,6 +280,7 @@ def review_cmd(
     script_hits: list[dict] = []
     source_hits: dict = {}
     x_hits: dict = {}
+    crowding_stats: dict = {}
     try:
         from zhiku.macro.runner import run_macro
         from zhiku.news.grades import load_followups, source_hitrate
@@ -263,8 +289,11 @@ def review_cmd(
         macro = run_macro(paths, end, provider_kind=ctx.obj["provider_kind"])
         script_hits = macro.script_hits
         news = run_news(paths, end, provider_kind=ctx.obj["provider_kind"], macro_bundle=macro)
-        source_hits = news.source_hits or source_hitrate(load_followups(paths.fixtures / "news.yaml"))
+        source_hits = news.source_hits or source_hitrate(
+            load_followups(paths.fixtures / "news.yaml")
+        )
         x_hits = news.x_hits or {}
+        crowding_stats = news.crowding_stats or {}
     except Exception:  # noqa: BLE001
         pass
     md = render(
@@ -275,6 +304,7 @@ def review_cmd(
         script_hits=script_hits,
         source_hits=source_hits,
         x_hits=x_hits,
+        crowding_stats=crowding_stats,
     )
     out = write_report(paths.reports, result.end, "weekly", md)
     typer.echo(md)
@@ -290,14 +320,19 @@ def screen_cmd(
     name: str = typer.Argument("all", help="greenblatt / piotroski / dividend / multifactor / all"),
 ) -> None:
     """运行经典选股公式，输出带分项的候选表。"""
+    from zhiku.events.pit import load_asof_universe
     from zhiku.pipeline.daily import _fundamentals_path
     from zhiku.pipeline.settings import load_pipeline_settings
-    from zhiku.screens.fundamentals import load_fundamentals
     from zhiku.screens.runner import SCREEN_FUNCS, run_screens
 
     paths: Paths = ctx.obj["paths"]
     settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
-    rows = load_fundamentals(_fundamentals_path(paths))
+    rows = load_asof_universe(
+        fundamentals_path=_fundamentals_path(paths),
+        pit_path=paths.fixtures / "pit_fundamentals.yaml",
+        delist_path=paths.fixtures / "delisted.yaml",
+        asof=now_shanghai().date(),
+    )
     names = None if name == "all" else [name]
     if names and names[0] not in SCREEN_FUNCS:
         _die(f"未知公式 {name}，可选：{', '.join(SCREEN_FUNCS)} / all")
@@ -318,9 +353,9 @@ def backtest_cmd(
 ) -> None:
     """对选股公式做月度等权回测；`trigger` 回测跌破价位线。"""
     from zhiku.backtest.engine import backtest_screen, backtest_trigger_line, load_price_panel
+    from zhiku.events.pit import drop_survivors, load_asof_universe, load_delist_map
     from zhiku.pipeline.daily import _fundamentals_path
     from zhiku.pipeline.settings import load_pipeline_settings
-    from zhiku.screens.fundamentals import load_fundamentals
     from zhiku.screens.runner import SCREEN_FUNCS, run_screens
 
     paths: Paths = ctx.obj["paths"]
@@ -328,6 +363,10 @@ def backtest_cmd(
     if not price_file.is_file():
         _die(f"找不到 {price_file}")
     prices = load_price_panel(price_file)
+    asof = now_shanghai().date()
+    delist = load_delist_map(paths.fixtures / "delisted.yaml")
+    if delist:
+        prices = drop_survivors(prices, delist, asof)
     settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
     if screen == "trigger":
         if "510300" not in prices.columns:
@@ -336,10 +375,17 @@ def backtest_cmd(
     else:
         if screen not in SCREEN_FUNCS:
             _die(f"未知公式 {screen}")
-        rows = load_fundamentals(_fundamentals_path(paths))
+        rows = load_asof_universe(
+            fundamentals_path=_fundamentals_path(paths),
+            pit_path=paths.fixtures / "pit_fundamentals.yaml",
+            delist_path=paths.fixtures / "delisted.yaml",
+            asof=asof,
+        )
         bundle = run_screens(rows, settings, names=[screen])
         picks = [r.symbol for r in bundle.screens.get(screen, [])[: settings.backtest.top_n]]
-        result = backtest_screen(prices, picks, settings.backtest, screen=screen)
+        result = backtest_screen(
+            prices, picks, settings.backtest, screen=screen, delist=delist, asof=asof
+        )
     typer.echo(
         f"{result.screen} 年化={result.annualized} 回撤={result.max_drawdown} "
         f"夏普={result.sharpe} 胜率={result.win_rate} 换手={result.turnover} "
@@ -454,7 +500,9 @@ def news_cmd(
     paths: Paths = ctx.obj["paths"]
     paths.ensure_runtime_dirs()
     on = _parse_date(date_text)
-    bundle = run_news(paths, on, kind=kind.replace("-", "_"), provider_kind=ctx.obj["provider_kind"])
+    bundle = run_news(
+        paths, on, kind=kind.replace("-", "_"), provider_kind=ctx.obj["provider_kind"]
+    )
     written = write_news_reports(paths, on, bundle)
     md = next((p for p in written if p.suffix == ".md"), None)
     if md is not None:

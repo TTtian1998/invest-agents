@@ -63,6 +63,7 @@ class SymbolEvaluation:
     merged_action: Action | None
     merged_qty: float | None
     warnings: list[str] = field(default_factory=list)
+    freeze_adds: bool = False
 
     @property
     def visible(self) -> list[Signal]:
@@ -177,8 +178,10 @@ class TriggerEvaluator:
     def evaluate_book(self, book: SymbolBook, on: date, mode: EvalMode) -> SymbolEvaluation:
         hist = self._history(book, on)
         warnings: list[str] = []
-        hhmm = time(14, 55) if mode is EvalMode.CHECK_1455 else (
-            HK_CLOSE if book.market is Market.HK else time(15, 0)
+        hhmm = (
+            time(14, 55)
+            if mode is EvalMode.CHECK_1455
+            else (HK_CLOSE if book.market is Market.HK else time(15, 0))
         )
         tz = EASTERN if book.market is Market.US else SHANGHAI
         if book.market is Market.US:
@@ -264,9 +267,7 @@ class TriggerEvaluator:
                     reason=reason,
                     action=rule.action,
                     volume_ratio=volume_ratio,
-                    sell_qty=(
-                        rule.action.sell_qty(book.position.qty) if preview_or_hit else None
-                    ),
+                    sell_qty=(rule.action.sell_qty(book.position.qty) if preview_or_hit else None),
                 )
             )
 

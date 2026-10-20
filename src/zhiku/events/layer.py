@@ -15,6 +15,7 @@ from zhiku.events.models import Emergency
 from zhiku.events.novelty import attach_novelty
 from zhiku.events.surprise import asof_filter, attach_surprise, load_consensus, load_implied_moves
 from zhiku.news.models import ClusteredNews
+from zhiku.news.study import summarize_samples
 from zhiku.pipeline.settings import PipelineSettings
 
 
@@ -43,10 +44,8 @@ def apply_event_layer(
     implied = load_implied_moves(paths.fixtures / "implied_moves.yaml")
     attach_surprise(clusters, cards, implied)
 
-    hist_avgs: dict[str, tuple[float | None, float | None]] = {}
-    for s in samples or []:
-        hist_avgs.setdefault(s.catalyst, (None, None))
-    # 由 runner 传入 summarize 后的均值更准确；这里仅占位，novelty 用配置半衰期
+    stats = summarize_samples(list(samples or []))
+    hist_avgs = {k: (v.avg_t1, v.avg_t5) for k, v in stats.items()}
     attach_novelty(
         clusters,
         on=on,
@@ -60,7 +59,9 @@ def apply_event_layer(
         clusters,
         supply_path=_first_existing(
             paths.kb / "config" / "supply_chains.yaml",
+            paths.kb / "config" / "supply_chains.csv",
             paths.fixtures / "supply_chains.yaml",
+            paths.fixtures / "supply_chains.csv",
         ),
         geo_path=paths.kb / "config" / "chains.yaml",
     )
@@ -91,6 +92,28 @@ def apply_event_layer(
             "n_clusters": len(clusters),
             "emergency": emergency.to_dict(),
             "crowding_stats": crowd_stats,
+        },
+    )
+    log.append(
+        "judgment",
+        {
+            "asof": on.isoformat(),
+            "clusters": [
+                {
+                    "fingerprint": c.fingerprint,
+                    "symbol": c.symbol,
+                    "headline": c.headline,
+                    "catalyst": c.catalyst,
+                    "surprise_z": c.surprise_z,
+                    "surprise_missing": c.surprise_missing,
+                    "novelty": c.novelty,
+                    "session": c.session,
+                    "stale": c.stale,
+                    "crowding": c.crowding,
+                    "crowding_note": c.crowding_note,
+                }
+                for c in clusters
+            ],
         },
     )
     return EventLayerResult(emergency=emergency, crowding_stats=crowd_stats, notes=notes)

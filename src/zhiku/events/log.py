@@ -9,6 +9,35 @@ from typing import Any
 
 from zhiku.calendar import now_shanghai
 
+_PRIVACY_KEYS = frozenset(
+    {
+        "qty",
+        "quantity",
+        "cost",
+        "cost_basis",
+        "position_qty",
+        "sell_qty",
+        "merged_qty",
+        "broker",
+        "account",
+        "name_personal",
+    }
+)
+
+
+def _scrub(value: Any) -> Any:
+    """日志不写数量/成本/账户。代码与公开价位可保留。"""
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            if str(k).lower() in _PRIVACY_KEYS:
+                continue
+            out[k] = _scrub(v)
+        return out
+    if isinstance(value, list):
+        return [_scrub(v) for v in value]
+    return value
+
 
 class DecisionLog:
     def __init__(self, path: Path) -> None:
@@ -17,11 +46,13 @@ class DecisionLog:
     def append(self, kind: str, payload: dict[str, Any], *, ts: datetime | None = None) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         stamp = (ts or now_shanghai()).isoformat()
-        row = {"ts": stamp, "kind": kind, "payload": payload}
+        row = {"ts": stamp, "kind": kind, "payload": _scrub(payload)}
         with self.path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
 
-    def append_many(self, kind: str, rows: list[dict[str, Any]], *, ts: datetime | None = None) -> int:
+    def append_many(
+        self, kind: str, rows: list[dict[str, Any]], *, ts: datetime | None = None
+    ) -> int:
         n = 0
         for row in rows:
             self.append(kind, row, ts=ts)

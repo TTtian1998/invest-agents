@@ -1,5 +1,6 @@
 # 公开知名产业链示例。节点里的 A 股代码是研究占位（000333/600519/0700.HK），
 # 不是真实供应商，也不代表任何个人持仓。数据逻辑：品牌→一阶供应商→二阶。
+# 可用 ZHIKU_KB/config/supply_chains.yaml 或 .csv 覆盖/追加（CSV 列：chain_id,chain_name,keywords,symbol,name,role,hop,direction）。
 chains:
   - id: aapl_supply
     name: 苹果供应链

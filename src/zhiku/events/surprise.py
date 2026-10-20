@@ -78,6 +78,19 @@ def load_implied_moves(path: Path) -> dict[str, float]:
     return out
 
 
+def _macro_match(cluster: ClusteredNews, card: SurpriseCard) -> bool:
+    token = (card.event_id or card.source or "").lower()
+    if not token:
+        return False
+    key = token.split("_")[0]
+    if len(key) < 3:
+        return False
+    blob = " ".join(
+        [cluster.headline, cluster.catalyst, *[i.headline for i in cluster.items]]
+    ).lower()
+    return key in blob.replace(" ", "")
+
+
 def attach_surprise(
     clusters: list[ClusteredNews],
     cards: list[SurpriseCard],
@@ -85,7 +98,10 @@ def attach_surprise(
 ) -> None:
     implied = implied or {}
     by_sym: dict[str, SurpriseCard] = {}
+    macros: list[SurpriseCard] = []
     for c in cards:
+        if c.kind == "macro" or c.event_id:
+            macros.append(c)
         if not c.symbol:
             continue
         prev = by_sym.get(c.symbol)
@@ -95,6 +111,14 @@ def attach_surprise(
         sym = cluster.symbol or ""
         card = by_sym.get(sym)
         if card is None:
+            hit = next((m for m in macros if _macro_match(cluster, m)), None)
+            if hit is not None:
+                cluster.surprise_z = hit.surprise_z
+                cluster.surprise_missing = hit.surprise_missing or (
+                    None if hit.surprise_z is not None else "缺数据：宏观尚无实际值"
+                )
+                cluster.surprise = hit
+                continue
             cluster.surprise_missing = "缺数据：无事前一致预期，不编造预期差"
             if sym in implied:
                 cluster.implied_move = implied[sym]
@@ -102,8 +126,12 @@ def attach_surprise(
             continue
         cluster.surprise_z = card.surprise_z
         cluster.surprise_missing = card.surprise_missing
-        cluster.implied_move = card.implied_move if card.implied_move is not None else implied.get(sym)
-        cluster.actual_move = card.actual_move if card.actual_move is not None else cluster.excess_return
+        cluster.implied_move = (
+            card.implied_move if card.implied_move is not None else implied.get(sym)
+        )
+        cluster.actual_move = (
+            card.actual_move if card.actual_move is not None else cluster.excess_return
+        )
         cluster.vs_implied = vs_implied(cluster.actual_move, cluster.implied_move)
         cluster.surprise = card
 
@@ -128,7 +156,9 @@ def live_ashare_forecast(symbol: str) -> SurpriseCard:
 
         df = ak.stock_profit_forecast_em()
     except Exception as exc:  # noqa: BLE001
-        return SurpriseCard(symbol=symbol, kind="eps", surprise_missing=f"缺数据：盈利预测不可用（{exc}）")
+        return SurpriseCard(
+            symbol=symbol, kind="eps", surprise_missing=f"缺数据：盈利预测不可用（{exc}）"
+        )
     if df is None or getattr(df, "empty", True):
         return SurpriseCard(symbol=symbol, kind="eps", surprise_missing="缺数据：盈利预测为空")
     code_col = next((c for c in df.columns if str(c) in {"代码", "symbol", "证券代码"}), None)
@@ -154,7 +184,9 @@ def live_implied_move(symbol: str) -> float | MissingData:
         return MissingData(f"缺数据：未安装 yfinance（{exc}）")
     try:
         ticker = yf.Ticker(symbol)
-        spot = float((ticker.fast_info or {}).get("lastPrice") or ticker.info.get("regularMarketPrice") or 0)
+        spot = float(
+            (ticker.fast_info or {}).get("lastPrice") or ticker.info.get("regularMarketPrice") or 0
+        )
         expiries = list(ticker.options or [])
         if not expiries or spot <= 0:
             return MissingData("缺数据：无期权到期日或现价")

@@ -96,17 +96,24 @@ def load_open_opportunities(path: Path) -> list[dict]:
 
 
 def apply_event_discipline(evaluations, *, emergency, expiries: list[ExpiryAlert]) -> list[str]:
-    """写入触发线评估警告：到期撤、应急禁加。不改规则 YAML。"""
+    """写入触发线评估：到期撤、应急禁加。卖出纪律保留，只禁新开/加仓。"""
     banners: list[str] = []
+    freeze = bool(
+        emergency is not None
+        and getattr(emergency, "active", False)
+        and getattr(emergency, "freeze_adds", False)
+    )
     if emergency is not None and getattr(emergency, "active", False):
         banners.append("应急模式：" + "；".join(emergency.reasons or []))
         banners.extend(list(emergency.playbook or []))
-        if emergency.freeze_adds:
+        if freeze:
             banners.append("应急模式：禁加")
     for exp in expiries:
         banners.append(f"{exp.symbol} 事件机会到期未兑现，撤（{exp.time_stop_on}）")
     for ev in evaluations or []:
         ev.warnings.extend(banners)
+        if freeze:
+            ev.freeze_adds = True
     return banners
 
 

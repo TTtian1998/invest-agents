@@ -257,7 +257,6 @@ class EventSettings(BaseModel):
             "禁运",
             "sanction",
             "war",
-            "default",
             "halt",
         ]
     )

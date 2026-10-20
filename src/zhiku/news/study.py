@@ -74,15 +74,25 @@ def event_study_from_prices(
     events: list[tuple[str, pd.Timestamp, str]],
     horizons: tuple[int, ...] = (1, 5, 20),
     benchmark: str | None = "510300",
+    crowding: dict[str, str] | None = None,
 ) -> list[EventSample]:
-    """events: (symbol, event_date, catalyst)。价格不足则该样本缺对应期限，不插值。"""
+    """events: (symbol, event_date, catalyst)。只用事件日及之后的价格，不插值。"""
     px = prices.copy()
     px.index = pd.to_datetime(px.index)
     px = px.sort_index()
+    crowd = crowding or {}
     samples: list[EventSample] = []
     for symbol, when, catalyst in events:
         if symbol not in px.columns:
-            samples.append(EventSample(catalyst=catalyst, t1=None, t5=None, t20=None))
+            samples.append(
+                EventSample(
+                    catalyst=catalyst,
+                    t1=None,
+                    t5=None,
+                    t20=None,
+                    crowding_bucket=crowd.get(symbol, ""),
+                )
+            )
             continue
         series = px[symbol].dropna()
         bench = px[benchmark].dropna() if benchmark and benchmark in px.columns else None
@@ -107,6 +117,7 @@ def event_study_from_prices(
                 t1=payload["t1"],
                 t5=payload["t5"],
                 t20=payload["t20"],
+                crowding_bucket=crowd.get(symbol, ""),
             )
         )
     return samples

@@ -9,12 +9,13 @@ from pathlib import Path
 
 from zhiku.backtest.engine import backtest_screen, load_price_panel
 from zhiku.config import Paths
+from zhiku.events.pit import drop_survivors, load_asof_universe, load_delist_map
 from zhiku.factors.merge import merge_scores
 from zhiku.factors.qlib_adapter import predict_scores, qlib_available
 from zhiku.notify.render import render, write_report
 from zhiku.pipeline.settings import load_pipeline_settings
 from zhiku.review.audit import audit_top
-from zhiku.screens.fundamentals import Fundamentals, by_symbol, load_fundamentals
+from zhiku.screens.fundamentals import Fundamentals, by_symbol
 from zhiku.screens.runner import ScreenBundle, formula_scores, run_screens
 
 
@@ -54,7 +55,12 @@ def run_daily(
     screen_names: list[str] | None = None,
 ) -> DailyResult:
     settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
-    rows = load_fundamentals(_fundamentals_path(paths))
+    rows = load_asof_universe(
+        fundamentals_path=_fundamentals_path(paths),
+        pit_path=paths.fixtures / "pit_fundamentals.yaml",
+        delist_path=paths.fixtures / "delisted.yaml",
+        asof=on,
+    )
     names = {r.symbol: r.name for r in rows}
     bundle = run_screens(rows, settings, names=screen_names)
     notes: list[str] = []
@@ -69,9 +75,13 @@ def run_daily(
     ]
 
     prices = None
+    delist = load_delist_map(paths.fixtures / "delisted.yaml")
     price_file = paths.fixtures / "monthly_prices.csv"
     if price_file.is_file():
         prices = load_price_panel(price_file)
+        if delist:
+            prices = drop_survivors(prices, delist, on)
+            notes.append("价格面板已按退市日截断，避免幸存者偏差。")
 
     active_screens = dict(bundle.screens)
     gated: list[str] = []
@@ -79,7 +89,9 @@ def run_daily(
     if prices is not None:
         for name, srows in bundle.screens.items():
             picks = [r.symbol for r in srows[: settings.backtest.top_n]]
-            bt = backtest_screen(prices, picks, settings.backtest, screen=name)
+            bt = backtest_screen(
+                prices, picks, settings.backtest, screen=name, delist=delist, asof=on
+            )
             backtests[name] = bt.to_dict()
             if not bt.passed_gate:
                 gated.append(name)
@@ -90,9 +102,7 @@ def run_daily(
         notes.append("缺 monthly_prices.csv，跳过回测闸门。")
 
     formula = formula_scores(
-        ScreenBundle(
-            bundle.universe_size, bundle.quality_passed, bundle.quality, active_screens
-        )
+        ScreenBundle(bundle.universe_size, bundle.quality_passed, bundle.quality, active_screens)
     )
     merged = merge_scores(names, formula, qlib_scores, settings.merge)
     result.screens = {

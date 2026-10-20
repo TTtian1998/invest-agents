@@ -14,10 +14,17 @@ from zhiku.news.confirm import attach_reactions
 from zhiku.news.models import ClusteredNews, MarketReaction, NewsItem, SourceError
 from zhiku.news.opportunities import build_opportunities
 from zhiku.news.sources import fetch_live, load_fixture_news
-from zhiku.news.study import load_event_history, load_weights, save_weights, summarize_samples, update_weights
+from zhiku.news.study import (
+    load_event_history,
+    load_weights,
+    save_weights,
+    summarize_samples,
+    update_weights,
+)
 from zhiku.notify.render import render, write_report
 from zhiku.pipeline.settings import PipelineSettings, load_pipeline_settings
-from zhiku.screens.fundamentals import Fundamentals, load_fundamentals
+from zhiku.events.pit import load_asof_universe
+from zhiku.screens.fundamentals import Fundamentals
 from zhiku.screens.quality import filter_universe
 
 
@@ -157,7 +164,9 @@ def run_news(
     from zhiku.macro.chains import load_chains, match_text
 
     chains = load_chains(paths.kb / "config" / "chains.yaml")
-    chain_notes = {c.id: f"{c.name}→商品 {','.join(c.commodities)} / A股 {','.join(c.a_share)}" for c in chains}
+    chain_notes = {
+        c.id: f"{c.name}→商品 {','.join(c.commodities)} / A股 {','.join(c.a_share)}" for c in chains
+    }
     for cluster in clusters:
         blob = cluster.headline + " " + " ".join(i.summary for i in cluster.items)
         matched = match_text(blob, chains)
@@ -182,10 +191,12 @@ def run_news(
         if cluster.source_grade == 3:
             cluster.institution_review = review_institution(cluster, track)
 
-    funds: list[Fundamentals] = []
-    fund_path = paths.fixtures / "fundamentals.yaml"
-    if fund_path.is_file():
-        funds = load_fundamentals(fund_path)
+    funds: list[Fundamentals] = load_asof_universe(
+        fundamentals_path=paths.fixtures / "fundamentals.yaml",
+        pit_path=paths.fixtures / "pit_fundamentals.yaml",
+        delist_path=paths.fixtures / "delisted.yaml",
+        asof=on,
+    )
     fund_map = {f.symbol: f for f in funds}
     if quality_passed is None and funds:
         passed, _ = filter_universe(funds, settings.quality, settings.universe)
@@ -197,7 +208,8 @@ def run_news(
     if hist_path.is_file():
         stats = summarize_samples(load_event_history(hist_path))
     hist_wr = {
-        k: (v.winrate_t5 if v.winrate_t5 is not None else v.winrate_t1) or 0.5 for k, v in stats.items()
+        k: (v.winrate_t5 if v.winrate_t5 is not None else v.winrate_t1) or 0.5
+        for k, v in stats.items()
     }
     weight_path = paths.journal / "news_weights.json"
     weights = load_weights(weight_path)
@@ -284,14 +296,10 @@ def run_news(
     attach_invalidation(
         opps, clusters, on=on, event_settings=settings.events, news_settings=settings.news
     )
-    DecisionLog(paths.journal / "decisions.jsonl").append_many(
-        "opportunity",
-        [o.to_dict() for o in opps],
-    )
-    DecisionLog(paths.journal / "decisions.jsonl").append_many(
-        "analysis",
-        [c.to_dict() for c in cards],
-    )
+    log = DecisionLog(paths.journal / "decisions.jsonl")
+    log.append_many("opportunity", [o.to_dict() for o in opps])
+    log.append_many("analysis", [c.to_dict() for c in cards])
+    _append_opportunity_log(paths.journal / "opportunities.jsonl", on, [o.to_dict() for o in opps])
     card_by_subject = {c.subject: c for c in cards}
     for o in opps:
         hit = card_by_subject.get(o.trigger_headline)
@@ -330,7 +338,9 @@ def run_news(
         analyses=[c.to_dict() for c in cards],
         low_value_count=low_n,
         links=links,
-        window_banners=list(getattr(macro_bundle, "window_banners", None) or []) if macro_bundle else [],
+        window_banners=list(getattr(macro_bundle, "window_banners", None) or [])
+        if macro_bundle
+        else [],
         analysis_engine=engine,
         source_hits=source_hitrate(followups),
         kol_feed=feed,
@@ -376,6 +386,7 @@ def _cluster_dict(c: ClusteredNews) -> dict:
         "first_source": c.first_source,
         "novelty": c.novelty,
         "session": c.session,
+        "session_market": c.session_market,
         "earliest_executable": c.earliest_executable,
         "decay": c.decay,
         "stale": c.stale,
@@ -431,7 +442,6 @@ def write_news_reports(paths: Paths, on: date, bundle: NewsBundle) -> list[Path]
     json_path.write_text(bundle.to_json() + "\n", encoding="utf-8")
     (paths.reports / "latest-news.json").write_text(bundle.to_json() + "\n", encoding="utf-8")
     written.append(json_path)
-    _append_opportunity_log(paths.journal / "opportunities.jsonl", on, bundle.opportunities)
     return written
 
 

@@ -21,8 +21,8 @@
 
 {% for ev in evaluations if ev.visible %}
 ## {{ ev.book.symbol }} {{ ev.book.name }}（{{ ev.book.market.value }}）
-{% if ev.book.add_blocked %}
-- **禁加**
+{% if ev.book.add_blocked or ev.freeze_adds %}
+- **禁加**{% if ev.freeze_adds %}（应急模式）{% endif %}
 {% endif %}
 {% for s in ev.visible %}
 - 规则 `{{ s.rule_id }}`：**{{ s.status_cn }}**

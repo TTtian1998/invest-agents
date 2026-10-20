@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 
 import yaml
@@ -40,21 +41,72 @@ class SupplyChain(BaseModel):
     source_note: str = "公开披露/行业分类示例，占位代码非真实持仓"
 
 
+def _from_csv(path: Path) -> list[SupplyChain]:
+    grouped: dict[str, SupplyChain] = {}
+    with path.open(encoding="utf-8", newline="") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            cid = str(row.get("chain_id") or row.get("id") or "").strip()
+            if not cid:
+                continue
+            chain = grouped.get(cid)
+            if chain is None:
+                kws = str(row.get("keywords") or "")
+                chain = SupplyChain(
+                    id=cid,
+                    name=str(row.get("chain_name") or cid),
+                    keywords=[p.strip() for p in kws.replace("|", ",").split(",") if p.strip()],
+                    nodes=[],
+                    source_note=str(row.get("source_note") or "CSV 维护的示例链"),
+                )
+                grouped[cid] = chain
+            sym = str(row.get("symbol") or "").strip()
+            if not sym:
+                continue
+            hop_raw = row.get("hop") or 0
+            try:
+                hop = int(hop_raw)
+            except (TypeError, ValueError):
+                hop = 0
+            chain.nodes.append(
+                GraphNode(
+                    symbol=sym,
+                    name=str(row.get("name") or ""),
+                    role=str(row.get("role") or ""),
+                    hop=hop,
+                    direction=str(row.get("direction") or "同向"),
+                )
+            )
+    return list(grouped.values())
+
+
 def load_supply_chains(path: Path | None = None) -> list[SupplyChain]:
     data: dict = {}
     if PACKAGE_GRAPH.is_file():
         data = yaml.safe_load(PACKAGE_GRAPH.read_text(encoding="utf-8")) or {}
-    if path is not None and path.is_file():
-        override = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        if isinstance(override, dict) and override.get("chains"):
-            data = override
     rows = data.get("chains") if isinstance(data, dict) else data
-    return [SupplyChain.model_validate(r) for r in (rows or [])]
+    chains = [SupplyChain.model_validate(r) for r in (rows or [])]
+    if path is None or not path.is_file():
+        return chains
+    if path.suffix.lower() == ".csv":
+        extra = _from_csv(path)
+        by = {c.id: c for c in chains}
+        for c in extra:
+            by[c.id] = c
+        return list(by.values())
+    override = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if isinstance(override, dict) and override.get("chains"):
+        return [SupplyChain.model_validate(r) for r in override["chains"]]
+    return chains
 
 
 def _blob(cluster: ClusteredNews) -> str:
     return " ".join(
-        [cluster.headline, cluster.symbol or "", *[i.headline + " " + i.summary for i in cluster.items]]
+        [
+            cluster.headline,
+            cluster.symbol or "",
+            *[i.headline + " " + i.summary for i in cluster.items],
+        ]
     ).lower()
 
 
@@ -68,9 +120,7 @@ def impacts_for_cluster(
     seen: set[tuple[str, str, int]] = set()
     for chain in supplies:
         keyed = any(k.lower() in blob for k in chain.keywords if k)
-        node_hit = any(
-            n.symbol == cluster.symbol or n.symbol.lower() in blob for n in chain.nodes
-        )
+        node_hit = any(n.symbol == cluster.symbol or n.symbol.lower() in blob for n in chain.nodes)
         if not (keyed or node_hit):
             continue
         origin = next((n for n in chain.nodes if n.symbol == cluster.symbol), None)

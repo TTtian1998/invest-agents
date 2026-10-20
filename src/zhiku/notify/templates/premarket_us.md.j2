@@ -35,6 +35,7 @@
 ### 质量档
 {% for o in news.by_tier.get("质量档", []) %}
 - **{{ o.symbol }}** {{ o.name }} {{ o.direction }} 分 {{ o.score }} — {{ o.entry_logic }}
+  - 失效：{{ o.invalidation or "缺数据" }}；时间止损 {{ o.time_stop_on or o.time_stop or "缺数据" }}
 {% endfor %}
 {% if not news.by_tier.get("质量档") %}
 无
@@ -43,6 +44,7 @@
 ### 交易档
 {% for o in news.by_tier.get("交易档", []) %}
 - **{{ o.symbol }}** {{ o.name }} {{ o.direction }} 分 {{ o.score }}；止损 {{ o.stop if o.stop is not none else "缺数据" }}
+  - 失效：{{ o.invalidation or "缺数据" }}；时间止损 {{ o.time_stop_on or o.time_stop or "缺数据" }}
 {% endfor %}
 {% if not news.by_tier.get("交易档") %}
 无

@@ -36,7 +36,9 @@ def _examples_kb() -> Path | None:
 def main() -> None:
     st.set_page_config(page_title="zhiku 看板", layout="wide")
     st.title("zhiku 投研看板")
-    st.caption("研究与提醒工具，不构成投资建议。页面中的持仓、价位、财务均为虚构示例或来自仓库外 ZHIKU_KB。")
+    st.caption(
+        "研究与提醒工具，不构成投资建议。页面中的持仓、价位、财务均为虚构示例或来自仓库外 ZHIKU_KB。"
+    )
 
     paths = Paths.load()
     daily = _load_daily(paths)
@@ -49,7 +51,17 @@ def main() -> None:
     if macro is None and macro_path is not None:
         macro = json.loads(macro_path.read_text(encoding="utf-8"))
     tabs = st.tabs(
-        ["今日候选", "单票详情", "回测", "今日舆情", "大V动态", "多空机会", "宏观与事件", "触发线风控", "每周命中率"]
+        [
+            "今日候选",
+            "单票详情",
+            "回测",
+            "今日舆情",
+            "大V动态",
+            "多空机会",
+            "宏观与事件",
+            "触发线风控",
+            "每周命中率",
+        ]
     )
 
     with tabs[0]:
@@ -62,7 +74,9 @@ def main() -> None:
             rows = daily.get("candidates") or []
             if rows:
                 df = pd.DataFrame(rows)
-                show = df[["symbol", "name", "total", "formula_score", "qlib_score", "source"]].copy()
+                show = df[
+                    ["symbol", "name", "total", "formula_score", "qlib_score", "source"]
+                ].copy()
                 st.dataframe(show, hide_index=True, use_container_width=True)
             else:
                 st.warning("今日无候选。")
@@ -99,10 +113,19 @@ def main() -> None:
             for name, bt in daily["backtests"].items():
                 st.subheader(name)
                 cols = st.columns(5)
-                cols[0].metric("年化", "缺数据" if bt.get("annualized") is None else f"{bt['annualized']:.2%}")
-                cols[1].metric("最大回撤", "缺数据" if bt.get("max_drawdown") is None else f"{bt['max_drawdown']:.2%}")
-                cols[2].metric("夏普", "缺数据" if bt.get("sharpe") is None else f"{bt['sharpe']:.2f}")
-                cols[3].metric("胜率", "缺数据" if bt.get("win_rate") is None else f"{bt['win_rate']:.1%}")
+                cols[0].metric(
+                    "年化", "缺数据" if bt.get("annualized") is None else f"{bt['annualized']:.2%}"
+                )
+                cols[1].metric(
+                    "最大回撤",
+                    "缺数据" if bt.get("max_drawdown") is None else f"{bt['max_drawdown']:.2%}",
+                )
+                cols[2].metric(
+                    "夏普", "缺数据" if bt.get("sharpe") is None else f"{bt['sharpe']:.2f}"
+                )
+                cols[3].metric(
+                    "胜率", "缺数据" if bt.get("win_rate") is None else f"{bt['win_rate']:.1%}"
+                )
                 cols[4].metric("闸门", "通过" if bt.get("passed_gate") else "未通过")
                 eq = bt.get("equity") or []
                 if eq:
@@ -116,12 +139,24 @@ def main() -> None:
         if not news:
             st.info("还没有舆情报告。请先运行 `zk --provider fixture news --date 2026-10-20`。")
         else:
-            st.caption(f"分析引擎：{news.get('analysis_engine')}；低价值未展开 {news.get('low_value_count', 0)} 条")
+            st.caption(
+                f"分析引擎：{news.get('analysis_engine')}；低价值未展开 {news.get('low_value_count', 0)} 条"
+            )
             em = news.get("emergency") or {}
             if em.get("active"):
                 st.error("应急模式：" + "；".join(em.get("reasons") or []))
                 for p in em.get("playbook") or []:
                     st.write(f"- {p}")
+                if em.get("affected"):
+                    st.caption(
+                        "受影响持仓代码："
+                        + "、".join(em.get("affected") or [])
+                        + "（不展示数量/成本）"
+                    )
+            crowd = news.get("crowding_stats") or {}
+            if crowd:
+                st.caption("拥挤度分组事件研究")
+                st.json(crowd)
             for a in news.get("analyses") or []:
                 st.subheader(a.get("subject") or "")
                 st.caption(a.get("source_grade_label") or "")
@@ -136,7 +171,19 @@ def main() -> None:
                     st.json(a["institution_review"])
             with st.expander("信源分级一览"):
                 for c in news.get("clusters") or []:
-                    st.write(f"- {c.get('source_grade_label')} {c.get('headline')}")
+                    extra = []
+                    if c.get("surprise_z") is not None:
+                        extra.append(f"z={c.get('surprise_z')}")
+                    elif c.get("surprise_missing"):
+                        extra.append(c.get("surprise_missing"))
+                    if c.get("session"):
+                        extra.append(str(c.get("session")))
+                    if c.get("stale"):
+                        extra.append("已过时")
+                    if c.get("crowding_note"):
+                        extra.append(c.get("crowding_note"))
+                    tail = "｜" + "；".join(extra) if extra else ""
+                    st.write(f"- {c.get('source_grade_label')} {c.get('headline')}{tail}")
 
     with tabs[4]:
         if not news:
@@ -170,7 +217,9 @@ def main() -> None:
             hits = news.get("x_hits") or {}
             if hits.get("accounts"):
                 st.subheader("账号命中率（动态权重）")
-                st.dataframe(pd.DataFrame(hits["accounts"]), hide_index=True, use_container_width=True)
+                st.dataframe(
+                    pd.DataFrame(hits["accounts"]), hide_index=True, use_container_width=True
+                )
 
     with tabs[5]:
         if not news:
@@ -185,8 +234,31 @@ def main() -> None:
                 if not rows:
                     st.write("无")
                 else:
-                    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
-                    st.caption("失效条件与时间止损见 invalidation / time_stop_on。")
+                    show_cols = [
+                        c
+                        for c in (
+                            "symbol",
+                            "name",
+                            "direction",
+                            "score",
+                            "invalidation",
+                            "time_stop_on",
+                            "surprise_z",
+                            "novelty",
+                            "crowding",
+                            "stale",
+                            "earliest_executable",
+                        )
+                        if rows and c in rows[0]
+                    ]
+                    st.dataframe(
+                        pd.DataFrame(rows)[show_cols] if show_cols else pd.DataFrame(rows),
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+                    st.caption(
+                        "失效条件与时间止损见 invalidation / time_stop_on。已过时或应急禁加会降为只观察。"
+                    )
 
     with tabs[6]:
         if not macro:
@@ -204,9 +276,13 @@ def main() -> None:
             else:
                 st.write("缺数据")
             st.write("已发布预期差")
-            st.dataframe(pd.DataFrame(macro.get("released") or []), hide_index=True, use_container_width=True)
+            st.dataframe(
+                pd.DataFrame(macro.get("released") or []), hide_index=True, use_container_width=True
+            )
             st.write("锚定资产")
-            st.dataframe(pd.DataFrame(macro.get("anchors") or []), hide_index=True, use_container_width=True)
+            st.dataframe(
+                pd.DataFrame(macro.get("anchors") or []), hide_index=True, use_container_width=True
+            )
             for a in macro.get("analyses") or []:
                 st.subheader(a.get("subject") or "")
                 if a.get("mark"):
@@ -249,8 +325,14 @@ def main() -> None:
         if rule_paths.positions.is_file():
             try:
                 portfolio = load_portfolio(rule_paths.positions)
-                provider = FixtureProvider(rule_paths.fixtures) if rule_paths.fixtures.is_dir() else None
-                quotes = provider.latest_quotes([p.symbol for p in portfolio.positions]) if provider else {}
+                provider = (
+                    FixtureProvider(rule_paths.fixtures) if rule_paths.fixtures.is_dir() else None
+                )
+                quotes = (
+                    provider.latest_quotes([p.symbol for p in portfolio.positions])
+                    if provider
+                    else {}
+                )
                 snap = ExposureGuard(rule_paths.exposure_state).evaluate(
                     portfolio, quotes, persist=False, asof=now_shanghai().date()
                 )
@@ -302,7 +384,9 @@ def main() -> None:
             x_hits = (news or {}).get("x_hits") if news else None
             if x_hits and x_hits.get("accounts"):
                 st.subheader("大V命中率")
-                st.dataframe(pd.DataFrame(x_hits["accounts"]), hide_index=True, use_container_width=True)
+                st.dataframe(
+                    pd.DataFrame(x_hits["accounts"]), hide_index=True, use_container_width=True
+                )
 
 
 if __name__ == "__main__":

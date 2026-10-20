@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from datetime import date
+
 from zhiku.backtest.metrics import BacktestResult, monthly_equal_weight, summarize_nav
 from zhiku.pipeline.settings import BacktestSettings
 
@@ -32,14 +34,21 @@ def backtest_screen(
     *,
     screen: str,
     benchmark: str | None = None,
+    delist: dict[str, date] | None = None,
+    asof: date | None = None,
 ) -> BacktestResult:
+    panel = prices
+    if delist:
+        from zhiku.events.pit import drop_survivors
+
+        panel = drop_survivors(panel, delist, asof or date.max)
     bench_col = benchmark or settings.benchmark
     nav, turnover = monthly_equal_weight(
-        prices, picks, cost_bps=settings.cost_bps, slippage_bps=settings.slippage_bps
+        panel, picks, cost_bps=settings.cost_bps, slippage_bps=settings.slippage_bps
     )
     bench_nav = None
-    if bench_col in prices.columns:
-        b = prices[bench_col].dropna()
+    if bench_col in panel.columns:
+        b = panel[bench_col].dropna()
         if len(b) >= 2:
             bench_nav = b / float(b.iloc[0])
     engine = "pandas"
@@ -49,7 +58,9 @@ def backtest_screen(
         notes.append("已检测到 vectorbt，净值仍按月度等权再平衡计算以便与无 extra 时对齐。")
     else:
         notes.append("未安装 [backtest] extra，使用内置 pandas 月度等权再平衡。")
-    notes.append("财务截面须按公告日对齐（见 zhiku.events.pit）；本函数只交易价格面板，不向前看未公告财务。")
+    notes.append(
+        "财务截面须按公告日对齐（zhiku.events.pit.load_asof_universe）；价格面板按退市日截断，避免幸存者偏差。"
+    )
     result = summarize_nav(
         nav,
         turnover=turnover,
@@ -85,11 +96,13 @@ def backtest_trigger_line(
     held = (px >= level).astype(float)
     ret = px.pct_change().fillna(0.0)
     strat = held.shift(1).fillna(0.0) * ret
-    cost = (held.diff().abs().fillna(0.0) * (cost_bps / 10000.0))
+    cost = held.diff().abs().fillna(0.0) * (cost_bps / 10000.0)
     strat = strat - cost
     nav = (1.0 + strat).cumprod()
     engine = "vectorbt" if vectorbt_available() else "pandas"
-    return summarize_nav(nav, returns=strat, rf=0.0, periods_per_year=252, screen="trigger", engine=engine)
+    return summarize_nav(
+        nav, returns=strat, rf=0.0, periods_per_year=252, screen="trigger", engine=engine
+    )
 
 
 def backtest_event_trades(
@@ -97,11 +110,16 @@ def backtest_event_trades(
     events: list[dict],
     *,
     cost_bps: float = 10.0,
+    delist: dict[str, date] | None = None,
 ) -> BacktestResult:
     """事件交易回测：下一根 K 线开仓，time_stop 根后或止损出场。与实盘时间止损同一套天数。"""
     if prices is None or prices.empty or not events:
         return BacktestResult("event", None, None, None, None, None, notes=["缺价格或无事件"])
     px = prices.sort_index()
+    if delist:
+        from zhiku.events.pit import drop_survivors
+
+        px = drop_survivors(px, delist, date.max)
     rets = px.pct_change().fillna(0.0)
     strat = pd.Series(0.0, index=px.index)
     notes = ["事件回测使用 time_stop，不用无限持有。"]
@@ -135,6 +153,8 @@ def backtest_event_trades(
             if move <= -stop_pct:
                 break
     nav = (1.0 + strat).cumprod()
-    result = summarize_nav(nav, returns=strat, rf=0.0, periods_per_year=252, screen="event", engine="pandas")
+    result = summarize_nav(
+        nav, returns=strat, rf=0.0, periods_per_year=252, screen="event", engine="pandas"
+    )
     result.notes = notes
     return result

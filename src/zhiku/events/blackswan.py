@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
@@ -11,6 +12,17 @@ from zhiku.news.models import ClusteredNews
 from zhiku.pipeline.settings import EventSettings
 
 PACKAGE_PLAYBOOK = Path(__file__).resolve().parent / "playbook.yaml"
+
+
+def keyword_hit(blob: str, key: str) -> bool:
+    """中文按子串；英文按词边界，避免 war 命中 forward。"""
+    if not key:
+        return False
+    text = (blob or "").lower()
+    needle = key.lower()
+    if any("\u4e00" <= ch <= "\u9fff" for ch in key):
+        return needle in text
+    return bool(re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", text))
 
 
 def load_playbook(path: Path | None = None) -> list[str]:
@@ -54,13 +66,17 @@ def detect_emergency(
         pass
     if idx_f is not None and idx_f <= -abs(settings.index_intraday_drop):
         reasons.append(f"指数盘中跌幅 {idx_f:.0%} 超过阈值 {settings.index_intraday_drop:.0%}")
-    keys = tuple(k.lower() for k in settings.emergency_keywords)
+    keys = tuple(settings.emergency_keywords)
     hits: list[str] = []
     sources: set[str] = set()
     for cluster in clusters:
-        blob = (cluster.headline + " " + " ".join(i.summary for i in cluster.items)).lower()
-        if any(k in blob for k in keys):
-            srcs = {i.source for i in cluster.items} | {i.x_handle for i in cluster.items if i.x_handle}
+        blob = (
+            cluster.headline + " " + " ".join(i.summary + " " + i.headline for i in cluster.items)
+        )
+        if any(keyword_hit(blob, k) for k in keys):
+            srcs = {i.source for i in cluster.items} | {
+                i.x_handle for i in cluster.items if i.x_handle
+            }
             sources |= {s for s in srcs if s}
             hits.append(cluster.headline)
     if len(sources) >= settings.emergency_min_sources and hits:

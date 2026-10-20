@@ -15,6 +15,7 @@ class SurpriseCard(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     symbol: str = ""
+    event_id: str = ""
     kind: str = ""  # eps | revenue | macro | other
     consensus: float | None = None
     actual: float | None = None

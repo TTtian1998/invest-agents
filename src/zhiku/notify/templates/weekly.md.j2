@@ -35,6 +35,15 @@
 本周无已落地宏观剧本样本。
 {% endif %}
 
+## 拥挤度分组事件研究
+{% if crowding_stats %}
+{% for k, v in crowding_stats.items() %}
+- {{ k }}：样本 {{ v.n }}；T+1 胜率 {{ v.winrate_t1 if v.winrate_t1 is not none else "缺数据" }}；T+5 胜率 {{ v.winrate_t5 if v.winrate_t5 is not none else "缺数据" }}
+{% endfor %}
+{% else %}
+缺数据。
+{% endif %}
+
 ## 大V命中率
 {% if x_hits is defined and x_hits and x_hits.accounts %}
 - 合计：兑现 {{ x_hits.hit }}；落空 {{ x_hits.miss }}；待定 {{ x_hits.pending }}；命中率 {{ "%.0f%%"|format(x_hits.hit_rate * 100) if x_hits.hit_rate is not none else "缺数据" }}

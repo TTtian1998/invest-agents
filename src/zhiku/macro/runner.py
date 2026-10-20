@@ -22,7 +22,9 @@ from zhiku.macro.windows import active_windows, build_windows, window_banner
 from zhiku.models import MissingData
 from zhiku.notify.render import render, write_report
 from zhiku.pipeline.settings import PipelineSettings, load_pipeline_settings
-from zhiku.screens.fundamentals import Fundamentals, load_fundamentals
+from zhiku.events.log import DecisionLog
+from zhiku.events.pit import load_asof_universe
+from zhiku.screens.fundamentals import Fundamentals
 
 
 @dataclass
@@ -49,7 +51,7 @@ class MacroBundle:
         return json.dumps(self.__dict__, ensure_ascii=False, indent=2, default=str)
 
 
-def _holdings_fundamentals(paths: Paths) -> list[Fundamentals] | None:
+def _holdings_fundamentals(paths: Paths, asof: date) -> list[Fundamentals] | None:
     if not paths.positions.is_file():
         return None
     try:
@@ -57,11 +59,13 @@ def _holdings_fundamentals(paths: Paths) -> list[Fundamentals] | None:
     except RulesSchemaError:
         return None
     symbols = {p.symbol for p in port.positions}
-    fund_path = paths.fixtures / "fundamentals.yaml"
-    funds: list[Fundamentals] = []
-    if fund_path.is_file():
-        all_rows = load_fundamentals(fund_path)
-        funds = [f for f in all_rows if f.symbol in symbols]
+    all_rows = load_asof_universe(
+        fundamentals_path=paths.fixtures / "fundamentals.yaml",
+        pit_path=paths.fixtures / "pit_fundamentals.yaml",
+        delist_path=paths.fixtures / "delisted.yaml",
+        asof=asof,
+    )
+    funds = [f for f in all_rows if f.symbol in symbols]
     if not funds:
         # 只有代码、没有行业时仍给出「缺行业」提示，绝不输出数量/成本
         funds = [
@@ -130,10 +134,14 @@ def run_macro(
     released = released_on_or_before(events, asof_dt, lookback_days=1)
 
     history = load_history(paths.fixtures / "macro_history.yaml")
-    holdings = _holdings_fundamentals(paths)
+    holdings = _holdings_fundamentals(paths, on)
     if holdings is None:
         notes.append("未找到私有持仓文件，事件剧本不输出持仓暴露。")
     scripts = build_scripts(future, history, holdings)
+    DecisionLog(paths.journal / "decisions.jsonl").append_many(
+        "script",
+        [_script_dict(s) for s in scripts],
+    )
 
     windows = build_windows(events, settings.macro)
     active = active_windows(windows, on)
@@ -192,7 +200,9 @@ def run_macro(
                 on=on,
                 script=script_by_id.get(ev.id),
                 rate=rate.model_dump(),
-                chain_notes=chain_note_list if ev.event_type in {"OPEC", "EIA"} or "地缘" in ev.display_name else [],
+                chain_notes=chain_note_list
+                if ev.event_type in {"OPEC", "EIA"} or "地缘" in ev.display_name
+                else [],
             ).to_dict()
         )
     if analyses and all(not a.get("deep") for a in analyses):

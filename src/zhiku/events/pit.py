@@ -9,7 +9,7 @@ import pandas as pd
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
-from zhiku.screens.fundamentals import Fundamentals
+from zhiku.screens.fundamentals import Fundamentals, load_fundamentals
 
 
 class PitRow(BaseModel):
@@ -58,7 +58,9 @@ class LookAheadError(ValueError):
     """使用了公告日之后的财务，构成前视偏差。"""
 
 
-def asof_snapshot(rows: list[PitRow], asof: date, *, strict: bool = True) -> dict[str, Fundamentals]:
+def asof_snapshot(
+    rows: list[PitRow], asof: date, *, strict: bool = True
+) -> dict[str, Fundamentals]:
     """每个标的取 announced<=asof 的最新一条。period 日不得替代公告日。"""
     chosen: dict[str, PitRow] = {}
     for row in rows:
@@ -89,9 +91,12 @@ def assert_no_lookahead(rows: list[PitRow], asof: date, used: list[Fundamentals]
         if leaked and fund.roe in {r.payload.get("roe") for r in leaked}:
             raise LookAheadError(f"{fund.symbol} 使用了未公告财务（公告日晚于 {asof}）")
         for r in candidates:
-            if r.announced > asof and r.payload.get("roe") == fund.roe and fund.roe not in {
-                x.payload.get("roe") for x in candidates if x.announced <= asof
-            }:
+            if (
+                r.announced > asof
+                and r.payload.get("roe") == fund.roe
+                and fund.roe
+                not in {x.payload.get("roe") for x in candidates if x.announced <= asof}
+            ):
                 raise LookAheadError(f"{fund.symbol} look-ahead via period 对齐")
 
 
@@ -130,3 +135,41 @@ def load_delist_map(path: Path) -> dict[str, date]:
         if sym and d:
             out[sym] = d
     return out
+
+
+def overlay_pit(base: list[Fundamentals], snap: dict[str, Fundamentals]) -> list[Fundamentals]:
+    """用 announced<=asof 的 PIT 快照覆盖同代码字段，其余截面字段保留。"""
+    by = {f.symbol: f for f in base}
+    for sym, pit in snap.items():
+        if sym in by:
+            data = by[sym].model_dump()
+            for key, val in pit.model_dump().items():
+                if key == "market":
+                    data[key] = val
+                    continue
+                if val is None or val == [] or val == "":
+                    continue
+                data[key] = val
+            by[sym] = Fundamentals.model_validate(data)
+        else:
+            by[sym] = pit
+    return list(by.values())
+
+
+def load_asof_universe(
+    *,
+    fundamentals_path: Path | None,
+    pit_path: Path | None,
+    delist_path: Path | None,
+    asof: date,
+) -> list[Fundamentals]:
+    """选股/回测用的 point-in-time 宇宙：公告日对齐 + 退市剔除。"""
+    rows: list[Fundamentals] = []
+    if fundamentals_path is not None and fundamentals_path.is_file():
+        rows = load_fundamentals(fundamentals_path)
+    if pit_path is not None and pit_path.is_file():
+        snap = asof_snapshot(load_pit_rows(pit_path), asof)
+        rows = overlay_pit(rows, snap)
+    delist = load_delist_map(delist_path) if delist_path is not None else {}
+    keep = set(universe_with_delist([r.symbol for r in rows], delist, asof))
+    return [r for r in rows if r.symbol in keep]
