@@ -93,7 +93,14 @@ def sync_market(
         if i == 1 or i % 50 == 0 or i == len(symbols):
             _log(progress, f"日线 {i}/{len(symbols)} {symbol}")
         _sync_cn_symbol_bars(store, fetcher, symbol, start, end, resume, report)
-        _sync_cn_symbol_fin(store, fetcher, symbol, resume, report)
+
+    bulk_ok = _sync_bulk_financials(store, fetcher, start, end, resume, report, progress)
+    if not bulk_ok:
+        report.notes.append("整表财报不可用，回退到按代码拉三张报表（较慢）")
+        for i, symbol in enumerate(symbols, 1):
+            if i == 1 or i % 50 == 0 or i == len(symbols):
+                _log(progress, f"财报 {i}/{len(symbols)} {symbol}")
+            _sync_cn_symbol_fin(store, fetcher, symbol, resume, report)
 
     if include_global:
         g_syms = _sync_global_lists(store, fetcher, end, hk_lists or ["hsi", "hstech"], us_lists or ["sp500", "ndx"], report, progress)
@@ -197,6 +204,79 @@ def _resolve_cn_symbols(store: MarketStore, universe: str, extra: list[str] | No
         if ns not in symbols:
             symbols.append(ns)
     return symbols
+
+
+def _quarter_ends(start: date, end: date) -> list[date]:
+    out: list[date] = []
+    y, q = start.year, (start.month - 1) // 3 + 1
+    month = q * 3
+    day = 31 if month in {3, 12} else 30
+    cur = date(y, month, day)
+    if cur < start:
+        cur = _next_quarter(cur)
+    while cur <= end:
+        out.append(cur)
+        cur = _next_quarter(cur)
+    return out
+
+
+def _next_quarter(d: date) -> date:
+    if d.month == 3:
+        return date(d.year, 6, 30)
+    if d.month == 6:
+        return date(d.year, 9, 30)
+    if d.month == 9:
+        return date(d.year, 12, 31)
+    return date(d.year + 1, 3, 31)
+
+
+def _sync_bulk_financials(
+    store: MarketStore,
+    fetcher: MarketFetcher,
+    start: date,
+    end: date,
+    resume: bool,
+    report: SyncReport,
+    progress: Progress | None,
+) -> bool:
+    periods = _quarter_ends(start, end)
+    if not periods:
+        return False
+    got = 0
+    for period in periods:
+        for kind in ("income", "balance", "cashflow", "yjbb"):
+            job = f"bulk:{kind}:{period.isoformat()}"
+            if resume and store.last_ok(job, "*") is not None:
+                got += 1
+                continue
+            _log(progress, f"整表财报 {kind} {period}")
+            raw = fetcher.bulk_financials(period, kind)
+            if isinstance(raw, MissingData):
+                if "未提供整表财务" in (raw.reason or ""):
+                    return False
+                store.log_missing(None, job, period, raw.reason)
+                store.set_state(job, "*", last_ok=None, status="missing", error=raw.reason)
+                report.missing += 1
+                continue
+            store.upsert_statements(raw)
+            names = []
+            for row in raw:
+                nm = (row.get("payload") or {}).get("name")
+                if nm:
+                    names.append(
+                        {
+                            "symbol": row["symbol"],
+                            "market": "CN",
+                            "name": nm,
+                            "instrument": "etf" if is_cn_etf(row["symbol"]) else "stock",
+                        }
+                    )
+            if names:
+                store.upsert_listings(names)
+            store.set_state(job, "*", last_ok=end, status="ok")
+            got += 1
+    report.notes.append(f"整表财报完成 {got}/{len(periods)*4} 次")
+    return got > 0
 
 
 def _sync_cn_symbol_bars(

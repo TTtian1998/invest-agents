@@ -16,6 +16,8 @@ from zhiku.data.codes import (
     is_cn_etf,
     limit_threshold,
     normalize_cn,
+    sina_code,
+    yfinance_cn,
 )
 from zhiku.data.retry import retry_call
 from zhiku.models import Market, MissingData
@@ -103,6 +105,9 @@ class MarketFetcher:
 
     def global_financials(self, symbol: str) -> dict[str, list[dict]] | MissingData:
         raise NotImplementedError
+
+    def bulk_financials(self, period: date, kind: str) -> list[dict] | MissingData:
+        return MissingData("未提供整表财务")
 
 
 class AkshareFetcher(MarketFetcher):
@@ -283,21 +288,108 @@ class AkshareFetcher(MarketFetcher):
 
     def cn_bars(self, symbol: str, start: date, end: date, adjust: str) -> pd.DataFrame | MissingData:
         code = normalize_cn(symbol)
-        adj = "" if adjust in {"none", "raw", ""} else "qfq"
-        names = ["fund_etf_hist_em"] if is_cn_etf(code) else ["stock_zh_a_hist"]
-        raw = self._ak(
-            names,
-            symbol=code,
-            period="daily",
-            start_date=_yyyymmdd(start),
-            end_date=_yyyymmdd(end),
-            adjust=adj,
-            md_symbol=code,
-            field="bars",
-        )
+        adj_flag = "none" if adjust in {"none", "raw", ""} else "qfq"
+        adj = "" if adj_flag == "none" else "qfq"
+        errors: list[str] = []
+        # 东财常被断开，只试一次；随后新浪 / 腾讯 / yfinance。
+        if is_cn_etf(code):
+            raw = self._ak(
+                ["fund_etf_hist_em"],
+                symbol=code,
+                period="daily",
+                start_date=_yyyymmdd(start),
+                end_date=_yyyymmdd(end),
+                adjust=adj,
+                md_symbol=code,
+                field="bars",
+            )
+            if not isinstance(raw, MissingData):
+                out = _normalize_cn_bars(code, raw, adjust=adj_flag)
+                if not isinstance(out, MissingData):
+                    return out
+            errors.append(str(getattr(raw, "reason", raw)))
+            bao = baostock_bars(code, start, end, adj_flag)
+            if not isinstance(bao, MissingData):
+                return bao
+        else:
+            raw = retry_call(
+                lambda: self._caller(
+                    ["stock_zh_a_hist"],
+                    symbol=code,
+                    period="daily",
+                    start_date=_yyyymmdd(start),
+                    end_date=_yyyymmdd(end),
+                    adjust=adj,
+                ),
+                retries=0,
+                bucket="akshare-em",
+                sleep=self.sleep,
+                symbol=code,
+                field="bars",
+            )
+            if not isinstance(raw, MissingData):
+                out = _normalize_cn_bars(code, raw, adjust=adj_flag)
+                if not isinstance(out, MissingData):
+                    return out
+            errors.append("eastmoney hist failed")
+            bao = baostock_bars(code, start, end, adj_flag)
+            if not isinstance(bao, MissingData):
+                return bao
+            errors.append("baostock failed")
+            sina = sina_code(code)
+            raw = self._ak(
+                ["stock_zh_a_daily"],
+                symbol=sina,
+                start_date=_yyyymmdd(start),
+                end_date=_yyyymmdd(end),
+                adjust=adj,
+                md_symbol=code,
+                field="bars",
+            )
+            if not isinstance(raw, MissingData):
+                out = _normalize_cn_bars(code, raw, adjust=adj_flag)
+                if not isinstance(out, MissingData):
+                    return out
+            errors.append("sina daily failed")
+            raw = self._ak(
+                ["stock_zh_a_hist_tx"],
+                symbol=sina,
+                start_date=start.isoformat(),
+                end_date=end.isoformat(),
+                adjust=adj,
+                md_symbol=code,
+                field="bars",
+            )
+            if not isinstance(raw, MissingData):
+                out = _normalize_cn_bars(code, raw, adjust=adj_flag)
+                if not isinstance(out, MissingData):
+                    return out
+            errors.append("tencent hist failed")
+            yf = _yfinance_bars(yfinance_cn(code), start, end)
+            if not isinstance(yf, MissingData):
+                yf = yf.copy()
+                yf["symbol"] = code
+                yf["market"] = "CN"
+                return yf[yf["adjust"] == ("qfq" if adj_flag == "qfq" else "none")] if "adjust" in yf.columns else yf
+            errors.append("yfinance failed")
+        return MissingData("日线失败: " + "; ".join(errors), symbol=code)
+
+    def bulk_financials(self, period: date, kind: str) -> list[dict] | MissingData:
+        """全市场一张表。kind=income/balance/cashflow/yjbb。"""
+        date_s = period.strftime("%Y%m%d")
+        api = {
+            "income": (["stock_lrb_em"], "income"),
+            "balance": (["stock_zcfz_em"], "balance"),
+            "cashflow": (["stock_xjll_em"], "cashflow"),
+            "yjbb": (["stock_yjbb_em"], "income"),
+        }.get(kind)
+        if not api:
+            return MissingData(f"未知整表 {kind}")
+        names, stmt_kind = api
+        raw = self._ak(names, date=date_s, field=f"bulk:{kind}")
         if isinstance(raw, MissingData):
             return raw
-        return _normalize_cn_bars(code, raw, adjust="none" if adj == "" else "qfq")
+        return _bulk_statements(raw, stmt_kind, period)
 
     def cn_statement(self, symbol: str, kind: str) -> list[dict] | MissingData:
         code = em_code(symbol)
@@ -371,6 +463,63 @@ class AkshareFetcher(MarketFetcher):
 
     def global_financials(self, symbol: str) -> dict[str, list[dict]] | MissingData:
         return _yfinance_financials(symbol)
+
+
+_BULK_MAP = {
+    "净利润": "净利润",
+    "营业总收入": "营业总收入",
+    "营业利润": "营业利润",
+    "利润总额": "利润总额",
+    "营业总支出-财务费用": "利息费用",
+    "资产-货币资金": "货币资金",
+    "资产-应收账款": "应收账款",
+    "资产-存货": "存货",
+    "资产-总资产": "资产总计",
+    "负债-总负债": "负债合计",
+    "股东权益合计": "股东权益合计",
+    "资产负债率": "资产负债率",
+    "经营性现金流-现金流量净额": "经营活动产生的现金流量净额",
+    "净资产收益率": "净资产收益率",
+    "销售毛利率": "毛利率",
+    "每股收益": "每股收益",
+    "每股净资产": "每股净资产",
+}
+
+
+def _bulk_statements(df: Any, kind: str, period: date) -> list[dict] | MissingData:
+    if df is None or getattr(df, "empty", True):
+        return MissingData(f"整表 {kind} 为空")
+    code_col = _col(df, "股票代码", "code")
+    name_col = _col(df, "股票简称", "名称", "name")
+    notice_col = _col(df, "公告日期", "最新公告日期", "NOTICE_DATE")
+    if code_col is None:
+        return MissingData(f"整表 {kind} 缺代码列")
+    rows: list[dict] = []
+    for _, row in df.iterrows():
+        code = normalize_cn(str(row[code_col]))
+        announced = _as_date(row[notice_col]) if notice_col else period
+        if announced is None:
+            announced = period
+        payload: dict[str, Any] = {}
+        for col, val in row.items():
+            payload[str(col)] = None if isinstance(val, float) and val != val else val
+        for src, dest in _BULK_MAP.items():
+            if src in df.columns and dest not in payload:
+                payload[dest] = _num(row[src])
+            elif src in df.columns:
+                payload[dest] = _num(row[src])
+        if name_col:
+            payload["name"] = str(row[name_col])
+        rows.append(
+            {
+                "symbol": code,
+                "kind": kind,
+                "period": period,
+                "announced": announced,
+                "payload": payload,
+            }
+        )
+    return rows or MissingData(f"整表 {kind} 无行")
 
 
 def _normalize_cn_bars(
@@ -602,7 +751,11 @@ def _yfinance_financials(symbol: str) -> dict[str, list[dict]] | MissingData:
     return out
 
 
+_BS_LOGGED_IN = False
+
+
 def baostock_bars(symbol: str, start: date, end: date, adjust: str) -> pd.DataFrame | MissingData:
+    global _BS_LOGGED_IN
     try:
         import baostock as bs
     except Exception as exc:  # noqa: BLE001
@@ -611,9 +764,11 @@ def baostock_bars(symbol: str, start: date, end: date, adjust: str) -> pd.DataFr
     prefix = "sh" if code.startswith(("6", "9")) else "sz"
     adj = "1" if adjust == "qfq" else "3"
     try:
-        lg = bs.login()
-        if lg.error_code != "0":
-            return MissingData(f"baostock 登录失败: {lg.error_msg}", symbol=symbol)
+        if not _BS_LOGGED_IN:
+            lg = bs.login()
+            if lg.error_code != "0":
+                return MissingData(f"baostock 登录失败: {lg.error_msg}", symbol=symbol)
+            _BS_LOGGED_IN = True
         rs = bs.query_history_k_data_plus(
             f"{prefix}.{code}",
             "date,open,high,low,close,volume,amount,turn,pctChg",
@@ -626,7 +781,6 @@ def baostock_bars(symbol: str, start: date, end: date, adjust: str) -> pd.DataFr
         while rs.error_code == "0" and rs.next():
             rec = rs.get_row_data()
             rows.append(rec)
-        bs.logout()
     except Exception as exc:  # noqa: BLE001
         return MissingData(f"baostock 拉取失败: {exc}", symbol=symbol)
     if not rows:

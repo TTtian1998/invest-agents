@@ -39,6 +39,10 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "shares": ("实收资本(或股本)", "Ordinary Shares Number", "SHARE_CAPITAL", "股本"),
     "inventory": ("存货", "Inventory", "INVENTORY"),
     "receivables": ("应收账款", "Net Receivables", "ACCOUNTS_RECE"),
+    "eps": ("每股收益", "EPS", "basicEPS"),
+    "bps": ("每股净资产", "Book Value Per Share", "BVPS"),
+    "roe_pct": ("净资产收益率", "ROE"),
+    "debt_asset_pct": ("资产负债率",),
 }
 
 
@@ -212,6 +216,9 @@ def snapshot_from_store(
     amount = None if not spot else _to_float(spot.get("amount"))
     if amount is None and amounts is not None:
         amount = amount_avg(amounts)
+    last_close = None
+    if closes is not None and not closes.dropna().empty:
+        last_close = float(closes.dropna().astype(float).iloc[-1])
     ni = pick_num(income, "net_income")
     assets = pick_num(balance, "total_assets")
     equity = pick_num(balance, "equity")
@@ -229,10 +236,26 @@ def snapshot_from_store(
     ato = ratio(pick_num(income, "revenue"), assets)
     ato_prev = ratio(pick_num(prev_income, "revenue"), pick_num(prev_balance, "total_assets"))
     roe = ratio(ni, equity)
+    if roe is None:
+        rp = pick_num(income, "roe_pct")
+        if rp is not None:
+            roe = rp / 100.0 if rp > 1 else rp
     debt_asset = ratio(pick_num(balance, "total_liab"), assets)
+    if debt_asset is None:
+        da = pick_num(balance, "debt_asset_pct") or pick_num(income, "debt_asset_pct")
+        if da is not None:
+            debt_asset = da / 100.0 if da > 1 else da
     ebit = ebit_of(income)
     nwc = nwc_of(balance)
     nfa = nfa_of(balance)
+    eps = pick_num(income, "eps")
+    bps = pick_num(income, "bps")
+    if mktcap is None and equity is not None and bps is not None and bps != 0 and last_close is not None:
+        mktcap = (equity / bps) * last_close
+    if pe is None and last_close is not None and eps is not None and eps != 0:
+        pe = last_close / eps
+    if pb is None and last_close is not None and bps is not None and bps != 0:
+        pb = last_close / bps
     ev = ev_of(mktcap, balance)
     name = (spot or {}).get("name") or listing.get("name") or ""
     st = bool(listing.get("st")) or "ST" in str(name).upper()

@@ -25,6 +25,21 @@ def normalize_cn(symbol: str) -> str:
     return code
 
 
+def sina_code(symbol: str) -> str:
+    """新浪 / 腾讯日线前缀。"""
+    code = normalize_cn(symbol)
+    if code.startswith(("6", "9", "5")):
+        return "sh" + code
+    return "sz" + code
+
+
+def yfinance_cn(symbol: str) -> str:
+    code = normalize_cn(symbol)
+    if code.startswith(("6", "9", "5")):
+        return f"{code}.SS"
+    return f"{code}.SZ"
+
+
 def em_code(symbol: str) -> str:
     """东方财富财务报表接口用 SH/SZ/BJ 前缀。"""
     code = normalize_cn(symbol)

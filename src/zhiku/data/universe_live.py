@@ -120,6 +120,15 @@ def build_fundamentals(
             except ValueError:
                 pass
         stmts = store.statements_asof(symbol, asof)
+        if "yjbb" in stmts:
+            income = dict(stmts.get("income") or {"payload": {}})
+            payload = dict(income.get("payload") or {})
+            extra = stmts["yjbb"].get("payload") or {}
+            for k, v in extra.items():
+                if v is not None and v != "":
+                    payload[k] = v
+            income["payload"] = payload
+            stmts["income"] = income
         income_h = store.statements_history(symbol, "income", asof)
         balance_h = store.statements_history(symbol, "balance", asof)
         closes = close_panel[symbol] if symbol in close_panel.columns else None
