@@ -4,6 +4,72 @@
 
 不接任何券商、不下单、不发消息（提醒通道需显式配置且默认跳过）。输出只有本地 markdown / HTML / JSON 和 stdout。
 
+## 产品截图 / Screenshots
+
+以下看板截图来自仓库内离线 demo（`bash examples/run_demo.sh` 后 `zk ui`）。**全部是虚构示例数据**：标的只有 510300、600519、AAPL、0700.HK、2800.HK、000333 等示例代码，页面上的价位、财务、新闻和宏观数字都是编造的。不含真实持仓、数量、成本、账户或个人信息。
+
+同一次 demo 产出的完整日报：[docs/sample_daily_report.md](docs/sample_daily_report.md)。
+
+### 今日候选股
+
+按公式打出的当日候选表；运行备注和未过门栏收在折叠里，表格先露出来。
+
+![今日候选股](docs/screenshots/candidates.png)
+
+### 单票详情
+
+单票分项得分与可选 AI 审核；没配 key 时明确跳过，不编造结论。
+
+![单票详情](docs/screenshots/stock_detail.png)
+
+### 公式回测
+
+各选股公式在虚构价上的月度等权回测与闸门结果。
+
+![公式回测](docs/screenshots/backtest.png)
+
+### 新闻舆情
+
+今日舆情以分析卡片为主体：事实 / 解读 / 推测、失效条件与时间止损，不是标题搬运。
+
+![新闻舆情](docs/screenshots/news_sentiment.png)
+
+### 大V动态
+
+关注名单上的财经账号动态、共振与账号命中率（帖子为虚构样本）。
+
+![大V动态](docs/screenshots/kol_feed.png)
+
+### 多空机会
+
+机会分质量 / 交易 / 只观察三档；应急模式下全部降为只观察。
+
+![多空机会](docs/screenshots/opportunities.png)
+
+### 宏观与事件
+
+宏观日历、预期差、锚定资产与事件剧本（时区 Asia/Shanghai）。
+
+![宏观与事件](docs/screenshots/macro_events.png)
+
+### 应急与拥挤
+
+黑天鹅应急清单与拥挤度反身性；只列受影响代码，不展示数量或成本。
+
+![应急与拥挤](docs/screenshots/crowding_emergency.png)
+
+### 持仓触发线风控
+
+触发线与禁加状态，读取示例知识库而非真实账户。
+
+![持仓触发线风控](docs/screenshots/trigger_risk.png)
+
+### 每周命中率
+
+触发线 T+1 / T+3 命中率、拥挤度分组与大V跟踪复盘。
+
+![每周命中率](docs/screenshots/weekly_hitrate.png)
+
 ## 5 分钟上手
 
 需要 Python ≥ 3.11。
