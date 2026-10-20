@@ -1,0 +1,11 @@
+# 复制到 ZHIKU_KB/config/pipeline.yaml 的 data: 段，或直接改 pipeline.yaml。
+# 本地库写在 ZHIKU_KB/data/，不进 git。
+
+universe: csi800          # all = A 股全市场（首次很慢）；csi800 适合跑通
+years: 3
+sleep_seconds: 0.2
+retries: 3
+include_global: true
+hk_lists: [hsi, hstech]
+us_lists: [sp500, ndx]
+extra_symbols: ["510300"]

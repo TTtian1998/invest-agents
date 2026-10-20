@@ -7,13 +7,14 @@ from dataclasses import asdict, dataclass, field
 from datetime import date
 from pathlib import Path
 
-from zhiku.backtest.engine import backtest_screen, load_price_panel
+from zhiku.backtest.engine import backtest_screen, load_price_panel, load_price_panel_from_store
 from zhiku.config import Paths
-from zhiku.events.pit import drop_survivors, load_asof_universe, load_delist_map
+from zhiku.events.pit import drop_survivors, load_delist_map
 from zhiku.factors.merge import merge_scores
-from zhiku.factors.qlib_adapter import predict_scores, qlib_available
+from zhiku.factors.qlib_adapter import model_status, predict_scores, qlib_available
 from zhiku.notify.render import render, write_report
 from zhiku.pipeline.settings import load_pipeline_settings
+from zhiku.pipeline.universe import fundamentals_path, load_pipeline_universe
 from zhiku.review.audit import audit_top
 from zhiku.screens.fundamentals import Fundamentals, by_symbol
 from zhiku.screens.runner import ScreenBundle, formula_scores, run_screens
@@ -32,19 +33,17 @@ class DailyResult:
     audits: list[dict] = field(default_factory=list)
     news: dict = field(default_factory=dict)
     macro: dict = field(default_factory=dict)
+    qlib: dict = field(default_factory=dict)
+    fictional: bool = True
+    universe_size: int = 0
+    missing_ratio: float | None = None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False, indent=2)
 
 
 def _fundamentals_path(paths: Paths) -> Path:
-    for cand in (
-        paths.fixtures / "fundamentals.yaml",
-        paths.kb / "fundamentals.yaml",
-    ):
-        if cand.is_file():
-            return cand
-    raise FileNotFoundError("找不到 fundamentals.yaml（请放在 fixtures 或 ZHIKU_KB）")
+    return fundamentals_path(paths)
 
 
 def run_daily(
@@ -55,33 +54,69 @@ def run_daily(
     screen_names: list[str] | None = None,
 ) -> DailyResult:
     settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
-    rows = load_asof_universe(
-        fundamentals_path=_fundamentals_path(paths),
-        pit_path=paths.fixtures / "pit_fundamentals.yaml",
-        delist_path=paths.fixtures / "delisted.yaml",
-        asof=on,
+    rows, delist, uni_notes = load_pipeline_universe(
+        paths, on, provider_kind=provider_kind, settings=settings
     )
     names = {r.symbol: r.name for r in rows}
     bundle = run_screens(rows, settings, names=screen_names)
-    notes: list[str] = []
-    if not qlib_available():
-        notes.append("未安装 [qlib]，总分仅使用公式分。")
-    qlib_scores = predict_scores(None, None)
+    notes: list[str] = list(uni_notes)
+    qlib_meta = model_status(paths.models_dir)
+    if qlib_meta.get("status") == "未训练":
+        notes.append("qlib 因子：未训练。总分仅使用公式分。")
+    elif not qlib_available() and qlib_meta.get("kind") != "lgb_lite":
+        notes.append("未安装 [qlib]，若本地已有 LightGBM 模型仍会出分。")
+    store = None
+    if provider_kind == "live":
+        from zhiku.data.store import MarketStore
 
-    result = DailyResult(asof=on.isoformat())
+        store = MarketStore(paths.data_dir)
+    qlib_scores = predict_scores(
+        None,
+        None,
+        store=store,
+        asof=on,
+        symbols=[r.symbol for r in rows],
+        models_dir=paths.models_dir,
+    )
+    if qlib_scores:
+        notes.append(
+            f"qlib 模型 {qlib_meta.get('trained_on') or '未知日期'}；"
+            f"IC={qlib_meta.get('ic')} RankIC={qlib_meta.get('rank_ic')}"
+        )
+
+    result = DailyResult(asof=on.isoformat(), fictional=provider_kind != "live")
+    result.universe_size = len(rows)
+    result.qlib = qlib_meta
     result.quality_passed = bundle.quality_passed
     result.quality_rejected = [
         {"symbol": q.symbol, "reasons": q.reasons} for q in bundle.quality if not q.passed
     ]
+    from zhiku.data.compute import missing_ratio as _miss
+
+    result.missing_ratio = _miss(rows) if rows else None
+    if result.missing_ratio is not None:
+        notes.append(f"截面缺数据比例 {result.missing_ratio:.1%}")
 
     prices = None
-    delist = load_delist_map(paths.fixtures / "delisted.yaml")
-    price_file = paths.fixtures / "monthly_prices.csv"
-    if price_file.is_file():
-        prices = load_price_panel(price_file)
-        if delist:
+    limit_up = limit_down = None
+    if provider_kind == "live" and store is not None and not store.is_empty():
+        prices = load_price_panel_from_store(store, [r.symbol for r in rows] + [settings.backtest.benchmark])
+        limit_up, limit_down = store.limit_panels(list(prices.columns) if not prices.empty else [])
+        if delist and prices is not None and not prices.empty:
             prices = drop_survivors(prices, delist, on)
-            notes.append("价格面板已按退市日截断，避免幸存者偏差。")
+            notes.append("价格面板来自本地库（前复权），已按退市日截断。")
+        if prices is None or prices.empty:
+            notes.append("本地库缺日线，跳过回测闸门。请先 zk data sync。")
+            prices = None
+    else:
+        if not delist:
+            delist = load_delist_map(paths.fixtures / "delisted.yaml")
+        price_file = paths.fixtures / "monthly_prices.csv"
+        if price_file.is_file():
+            prices = load_price_panel(price_file)
+            if delist:
+                prices = drop_survivors(prices, delist, on)
+                notes.append("价格面板已按退市日截断，避免幸存者偏差。")
 
     active_screens = dict(bundle.screens)
     gated: list[str] = []
@@ -90,7 +125,14 @@ def run_daily(
         for name, srows in bundle.screens.items():
             picks = [r.symbol for r in srows[: settings.backtest.top_n]]
             bt = backtest_screen(
-                prices, picks, settings.backtest, screen=name, delist=delist, asof=on
+                prices,
+                picks,
+                settings.backtest,
+                screen=name,
+                delist=delist,
+                asof=on,
+                limit_up=limit_up,
+                limit_down=limit_down,
             )
             backtests[name] = bt.to_dict()
             if not bt.passed_gate:
@@ -99,7 +141,10 @@ def run_daily(
         for name in gated:
             active_screens.pop(name, None)
     else:
-        notes.append("缺 monthly_prices.csv，跳过回测闸门。")
+        if provider_kind == "live":
+            notes.append("缺本地日线，跳过回测闸门。请先 zk data sync。")
+        else:
+            notes.append("缺 monthly_prices.csv，跳过回测闸门。")
 
     formula = formula_scores(
         ScreenBundle(bundle.universe_size, bundle.quality_passed, bundle.quality, active_screens)

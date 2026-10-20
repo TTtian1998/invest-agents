@@ -127,6 +127,16 @@ macro:
     US_PCE: {before: 1, after: 1}
     default: {before: 1, after: 1}
 
+data:
+  universe: csi800          # all=A股全市场；csi800 适合首次跑通
+  years: 3
+  sleep_seconds: 0.2
+  retries: 3
+  include_global: true
+  hk_lists: [hsi, hstech]
+  us_lists: [sp500, ndx]
+  extra_symbols: ["510300"]   # 沪深300ETF，回测基准；不含持仓信息
+
 events:
   enabled: true
   crowding_high: 0.70

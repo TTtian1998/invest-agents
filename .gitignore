@@ -8,6 +8,10 @@ config/x_accounts.yaml
 examples/kb/journal/
 examples/kb/reports/
 examples/kb/cache/
+examples/kb/data/
+examples/kb/models/
+qlib_data/
+.live-kb/
 
 # Python
 .venv/

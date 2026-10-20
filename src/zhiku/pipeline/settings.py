@@ -209,6 +209,23 @@ class MacroSettings(BaseModel):
         return {"before": rule.before, "after": rule.after}
 
 
+class DataSettings(BaseModel):
+    """真实数据层：股票池、同步窗口、港美名单。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    universe: str = "csi800"  # all / csi800 / csi300 / ...
+    years: int = 3
+    sleep_seconds: float = 0.2
+    retries: int = 3
+    include_global: bool = True
+    hk_lists: list[str] = Field(default_factory=lambda: ["hsi", "hstech"])
+    us_lists: list[str] = Field(default_factory=lambda: ["sp500", "ndx"])
+    extra_symbols: list[str] = Field(default_factory=lambda: ["510300"])
+    cost_bps: float = 10.0
+    slippage_bps: float = 5.0
+
+
 class EventSettings(BaseModel):
     """第 6/7 块事件驱动层：预期差、时效、拥挤、传导、止损、应急。"""
 
@@ -289,6 +306,7 @@ class PipelineSettings(BaseModel):
     news: NewsSettings = Field(default_factory=NewsSettings)
     macro: MacroSettings = Field(default_factory=MacroSettings)
     events: EventSettings = Field(default_factory=EventSettings)
+    data: DataSettings = Field(default_factory=DataSettings)
 
 
 DEFAULT_YAML = Path(__file__).resolve().parent / "default.yaml"

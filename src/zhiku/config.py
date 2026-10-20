@@ -47,6 +47,8 @@ class Paths:
     reports: Path
     fixtures: Path
     cache: Path
+    data_dir: Path
+    models_dir: Path
 
     @classmethod
     def load(
@@ -69,9 +71,13 @@ class Paths:
             reports=reports,
             fixtures=fx,
             cache=root / "cache" / "market.sqlite",
+            data_dir=root / "data",
+            models_dir=root / "models",
         )
 
     def ensure_runtime_dirs(self) -> None:
         self.journal.mkdir(parents=True, exist_ok=True)
         self.reports.mkdir(parents=True, exist_ok=True)
         self.cache.parent.mkdir(parents=True, exist_ok=True)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.models_dir.mkdir(parents=True, exist_ok=True)

@@ -89,7 +89,33 @@ zk --provider live check --at 1455
 zk --provider live daily --date 2026-10-20
 ```
 
-`.gitignore` 已忽略 `/kb/`、`*.local.yaml`、`.env`。不要把真实持仓提交进 git。
+`.gitignore` 已忽略 `/kb/`、`*.local.yaml`、`.env`、本地行情库 `**/data/`。不要把真实持仓提交进 git。
+
+## 真实数据（live）
+
+离线 demo 之后，把股票池从 `fundamentals.yaml` 换成全市场本地库。数据写在 `ZHIKU_KB/data/`（SQLite，可选 parquet），**不进 git**。
+
+```bash
+export ZHIKU_KB=/path/to/your-kb          # 仓库外；不要放真实持仓
+uv pip install -e ".[dev]"
+# 可选：uv pip install -e ".[qlib]"       # Alpha158；没有则 pandas+LightGBM
+zk data sync --universe csi800 --years 3  # 首次中证800约十几分钟到一小时（视限流）
+# 全市场：zk data sync --universe all --years 3   # 可能数小时，可 Ctrl+C 后加 --resume 续传
+zk factor prepare
+zk factor train
+zk --provider live daily --date 2026-10-20
+zk --provider live backtest greenblatt
+```
+
+- A 股：列表（含 ST、停牌、上市/退市日）、沪深300/中证500/中证1000/科创50/中证800 成分、前复权+不复权日线（成交额/换手）、利润表/资产负债表/现金流量表（带**公告日**，PIT 对齐）。
+- 港美：可配置恒生、恒生科技、标普500、纳指100 成分的日线与主要财务（yfinance；yfinance 无公告日时记缺数据，不用报告期冒充）。
+- 主源 akshare，备用 baostock / tushare（`TUSHARE_TOKEN`）。任何字段拿不到就「缺数据」，不插值。
+- 回测用本地库历史价，加交易成本，涨停不可买入、跌停不可卖出。
+- 没训练模型时日报写 **未训练**，只用公式分。
+
+首次同步耗时取决于数据源限流：本仓库开发机上中证800、近 3 年日线+财报通常需要 **20–90 分钟**；A 股全市场可能 **数小时**。中断后同一 `ZHIKU_KB` 再跑会跳过已完成标的。
+
+配置见 `config/data_sync.example.yaml`，写入 `ZHIKU_KB/config/pipeline.yaml` 的 `data:` 段。
 
 ## 命令
 
@@ -107,8 +133,9 @@ zk --provider live daily --date 2026-10-20
 | `zk review --week` | 触发线命中率 + 事件剧本兑现 + 信源跟踪 |
 | `zk ui` | 本地看板（需 `[ui]`），含「宏观与事件」 |
 | `zk debate 600519` | 可选 TradingAgents |
-| `zk backtest <公式\|trigger>` | 月度等权或触发线回测 |
-| `zk factor prepare\|train\|predict` | 可选 qlib |
+| `zk data sync` | 全市场增量同步到 `ZHIKU_KB/data`（可断点、限速） |
+| `zk backtest <公式\|trigger>` | 月度等权或触发线回测；live 用本地库价格 |
+| `zk factor prepare\|train\|predict` | 本地库→qlib bin→Alpha158/LightGBM |
 
 未装可选 extra 时命令降级或友好退出，不甩 traceback。
 

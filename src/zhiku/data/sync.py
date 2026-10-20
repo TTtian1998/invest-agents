@@ -1,0 +1,352 @@
+"""zk data sync：增量、可断点、限速重试。"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import date, timedelta
+from typing import Callable
+
+from zhiku.calendar import now_shanghai
+from zhiku.data.codes import is_cn_etf, normalize_cn
+from zhiku.data.fetchers import (
+    INDEX_CSI,
+    AkshareFetcher,
+    MarketFetcher,
+    baostock_bars,
+    tushare_bars,
+)
+from zhiku.data.store import MarketStore
+from zhiku.models import MissingData
+
+Progress = Callable[[str], None]
+
+
+@dataclass
+class SyncReport:
+    universe: str
+    start: date
+    end: date
+    listings: int = 0
+    bar_symbols: int = 0
+    statement_symbols: int = 0
+    missing: int = 0
+    notes: list[str] = field(default_factory=list)
+    elapsed_s: float = 0.0
+    used_fallback: str | None = None
+
+    def summary(self) -> str:
+        lines = [
+            f"universe={self.universe} {self.start}～{self.end}",
+            f"listings={self.listings} bar_symbols={self.bar_symbols} "
+            f"statement_symbols={self.statement_symbols} missing={self.missing}",
+            f"耗时 {self.elapsed_s:.1f}s",
+        ]
+        lines.extend(self.notes)
+        return "\n".join(lines)
+
+
+def _log(progress: Progress | None, msg: str) -> None:
+    if progress:
+        progress(msg)
+
+
+def _plus_one(d: date | None) -> date | None:
+    if d is None:
+        return None
+    return d + timedelta(days=1)
+
+
+def sync_market(
+    store: MarketStore,
+    *,
+    universe: str = "csi800",
+    start: date | None = None,
+    end: date | None = None,
+    years: int = 3,
+    resume: bool = True,
+    fetcher: MarketFetcher | None = None,
+    include_global: bool = True,
+    hk_lists: list[str] | None = None,
+    us_lists: list[str] | None = None,
+    extra_symbols: list[str] | None = None,
+    max_symbols: int | None = None,
+    sleep: float | None = None,
+    retries: int = 3,
+    progress: Progress | None = None,
+) -> SyncReport:
+    import time
+
+    t0 = time.monotonic()
+    end = end or now_shanghai().date()
+    start = start or date(end.year - years, end.month, end.day)
+    fetcher = fetcher or AkshareFetcher(sleep=sleep, retries=retries)
+    report = SyncReport(universe=universe, start=start, end=end)
+
+    _sync_cn_meta(store, fetcher, end, report, progress)
+    symbols = _resolve_cn_symbols(store, universe, extra_symbols)
+    if max_symbols is not None:
+        symbols = symbols[: max(0, max_symbols)]
+        report.notes.append(f"max_symbols={max_symbols}，实际 CN {len(symbols)} 只")
+    _log(progress, f"CN 同步标的 {len(symbols)} 只")
+
+    for i, symbol in enumerate(symbols, 1):
+        if i == 1 or i % 50 == 0 or i == len(symbols):
+            _log(progress, f"日线 {i}/{len(symbols)} {symbol}")
+        _sync_cn_symbol_bars(store, fetcher, symbol, start, end, resume, report)
+        _sync_cn_symbol_fin(store, fetcher, symbol, resume, report)
+
+    if include_global:
+        g_syms = _sync_global_lists(store, fetcher, end, hk_lists or ["hsi", "hstech"], us_lists or ["sp500", "ndx"], report, progress)
+        if max_symbols is not None:
+            g_syms = g_syms[: max(0, max_symbols)]
+        for i, symbol in enumerate(g_syms, 1):
+            if i == 1 or i % 20 == 0 or i == len(g_syms):
+                _log(progress, f"港美 {i}/{len(g_syms)} {symbol}")
+            _sync_global_symbol(store, fetcher, symbol, start, end, resume, report)
+
+    try:
+        n = len(store.export_parquet("qfq"))
+        report.notes.append(f"已导出 {n} 个日线文件到 data/bars/qfq/")
+    except Exception as exc:  # noqa: BLE001
+        report.notes.append(f"parquet 导出跳过: {exc}")
+
+    counts = store.counts()
+    report.listings = counts["listings"]
+    report.bar_symbols = counts["bar_symbols"]
+    report.statement_symbols = counts["statement_symbols"]
+    report.missing = counts["missing"]
+    report.elapsed_s = time.monotonic() - t0
+    return report
+
+
+def _sync_cn_meta(
+    store: MarketStore,
+    fetcher: MarketFetcher,
+    end: date,
+    report: SyncReport,
+    progress: Progress | None,
+) -> None:
+    _log(progress, "同步 A 股列表 / 退市 / 停牌 / 指数成分 / 截面")
+    listings = fetcher.cn_listings()
+    if isinstance(listings, MissingData):
+        store.log_missing(None, "listings", end, listings.reason)
+        report.notes.append(f"缺数据：A 股列表 {listings.reason}")
+        report.missing += 1
+    else:
+        store.upsert_listings(listings)
+        store.set_state("listings", "*", last_ok=end, status="ok")
+
+    delisted = fetcher.cn_delisted()
+    if isinstance(delisted, MissingData):
+        store.log_missing(None, "delist", end, delisted.reason)
+        report.notes.append(f"缺数据：退市列表 {delisted.reason}")
+        report.missing += 1
+    else:
+        for row in delisted:
+            if row.get("symbol") and row.get("delist_date"):
+                store.mark_delisted(row["symbol"], row["delist_date"], row.get("name"))
+
+    suspended = fetcher.cn_suspended(end)
+    if isinstance(suspended, MissingData):
+        store.log_missing(None, "suspended", end, suspended.reason)
+        report.missing += 1
+    else:
+        store.upsert_listings(
+            [{"symbol": s, "market": "CN", "suspended": True, "instrument": "stock"} for s in suspended]
+        )
+
+    for alias, code in INDEX_CSI.items():
+        members = fetcher.index_members(code)
+        if isinstance(members, MissingData):
+            store.log_missing(None, f"index:{alias}", end, members.reason)
+            report.notes.append(f"缺数据：指数 {alias} {members.reason}")
+            report.missing += 1
+            continue
+        store.upsert_index_members(code, end, members)
+        store.upsert_listings(
+            [{"symbol": s, "market": "CN", "instrument": "etf" if is_cn_etf(s) else "stock"} for s in members]
+        )
+
+    spot = fetcher.cn_spot()
+    if isinstance(spot, MissingData):
+        store.log_missing(None, "spot", end, spot.reason)
+        report.notes.append(f"缺数据：行情截面 {spot.reason}")
+        report.missing += 1
+    else:
+        store.upsert_spot(end, spot)
+        store.upsert_listings(
+            [
+                {
+                    "symbol": r["symbol"],
+                    "market": "CN",
+                    "name": r.get("name"),
+                    "st": r.get("st"),
+                    "instrument": "etf" if is_cn_etf(r["symbol"]) else "stock",
+                }
+                for r in spot
+            ]
+        )
+
+
+def _resolve_cn_symbols(store: MarketStore, universe: str, extra: list[str] | None) -> list[str]:
+    from zhiku.data.universe_live import resolve_universe_symbols
+
+    symbols = resolve_universe_symbols(store, universe)
+    for s in extra or []:
+        ns = normalize_cn(s) if not s.endswith((".HK", ".US")) and not s.isalpha() else s
+        if ns not in symbols:
+            symbols.append(ns)
+    return symbols
+
+
+def _sync_cn_symbol_bars(
+    store: MarketStore,
+    fetcher: MarketFetcher,
+    symbol: str,
+    start: date,
+    end: date,
+    resume: bool,
+    report: SyncReport,
+) -> None:
+    for adjust in ("qfq", "none"):
+        job = f"bars:{adjust}"
+        last = store.last_ok(job, symbol) if resume else None
+        fetch_start = start
+        if last and last >= end:
+            continue
+        if last:
+            fetch_start = max(start, _plus_one(last) or start)
+        raw = fetcher.cn_bars(symbol, fetch_start, end, adjust)
+        if isinstance(raw, MissingData):
+            raw = _fallback_cn_bars(symbol, fetch_start, end, adjust, report)
+        if isinstance(raw, MissingData):
+            store.log_missing(symbol, job, end, raw.reason)
+            store.set_state(job, symbol, last_ok=last, status="missing", error=raw.reason)
+            report.missing += 1
+            continue
+        store.upsert_bars(raw)
+        store.set_state(job, symbol, last_ok=end, status="ok")
+
+
+def _fallback_cn_bars(symbol: str, start: date, end: date, adjust: str, report: SyncReport):
+    raw = baostock_bars(symbol, start, end, adjust)
+    if not isinstance(raw, MissingData):
+        report.used_fallback = "baostock"
+        return raw
+    raw = tushare_bars(symbol, start, end, adjust)
+    if not isinstance(raw, MissingData):
+        report.used_fallback = "tushare"
+        return raw
+    return raw
+
+
+def _sync_cn_symbol_fin(
+    store: MarketStore,
+    fetcher: MarketFetcher,
+    symbol: str,
+    resume: bool,
+    report: SyncReport,
+) -> None:
+    job = "financials"
+    if resume and store.last_ok(job, symbol) is not None:
+        # 财报按整表覆盖；已成功则跳过，除非调用方关闭 resume
+        report.statement_symbols += 1
+        return
+    ok = True
+    for kind in ("income", "balance", "cashflow"):
+        raw = fetcher.cn_statement(symbol, kind)
+        if isinstance(raw, MissingData):
+            store.log_missing(symbol, kind, None, raw.reason)
+            report.missing += 1
+            ok = False
+            continue
+        store.upsert_statements(raw)
+    divs = fetcher.cn_dividends(symbol)
+    if isinstance(divs, MissingData):
+        store.log_missing(symbol, "dividend", None, divs.reason)
+        report.missing += 1
+    else:
+        store.upsert_dividends(divs)
+    if ok:
+        store.set_state(job, symbol, last_ok=now_shanghai().date(), status="ok")
+        report.statement_symbols += 1
+    else:
+        store.set_state(job, symbol, last_ok=None, status="partial")
+
+
+def _sync_global_lists(
+    store: MarketStore,
+    fetcher: MarketFetcher,
+    end: date,
+    hk_lists: list[str],
+    us_lists: list[str],
+    report: SyncReport,
+    progress: Progress | None,
+) -> list[str]:
+    symbols: list[str] = []
+    for name in [*hk_lists, *us_lists]:
+        members = fetcher.global_members(name)
+        if isinstance(members, MissingData):
+            store.log_missing(None, f"index:{name}", end, members.reason)
+            report.notes.append(f"缺数据：{name} 成分 {members.reason}")
+            report.missing += 1
+            continue
+        store.upsert_index_members(name, end, members)
+        market = "HK" if name.startswith("hs") else "US"
+        store.upsert_listings(
+            [{"symbol": s, "market": market, "instrument": "stock"} for s in members]
+        )
+        symbols.extend(members)
+        _log(progress, f"{name} 成分 {len(members)}")
+    # 去重保持顺序
+    seen: set[str] = set()
+    out = []
+    for s in symbols:
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
+
+def _sync_global_symbol(
+    store: MarketStore,
+    fetcher: MarketFetcher,
+    symbol: str,
+    start: date,
+    end: date,
+    resume: bool,
+    report: SyncReport,
+) -> None:
+    job = "bars:global"
+    last = store.last_ok(job, symbol) if resume else None
+    fetch_start = start
+    if last and last >= end:
+        pass
+    else:
+        if last:
+            fetch_start = max(start, _plus_one(last) or start)
+        raw = fetcher.global_bars(symbol, fetch_start, end)
+        if isinstance(raw, MissingData):
+            store.log_missing(symbol, job, end, raw.reason)
+            store.set_state(job, symbol, last_ok=last, status="missing", error=raw.reason)
+            report.missing += 1
+        else:
+            store.upsert_bars(raw)
+            store.set_state(job, symbol, last_ok=end, status="ok")
+    fin_job = "financials:global"
+    if resume and store.last_ok(fin_job, symbol) is not None:
+        return
+    raw_f = fetcher.global_financials(symbol)
+    if isinstance(raw_f, MissingData):
+        store.log_missing(symbol, fin_job, end, raw_f.reason)
+        store.set_state(fin_job, symbol, last_ok=None, status="missing", error=raw_f.reason)
+        report.missing += 1
+        return
+    for kind, rows in raw_f.items():
+        announced_is_period = any(r.get("announced_is_period") for r in rows)
+        store.upsert_statements(rows)
+        if announced_is_period:
+            store.log_missing(symbol, f"{kind}.announced", None, "yfinance 无公告日，用报告期并标注缺数据")
+            report.missing += 1
+    store.set_state(fin_job, symbol, last_ok=end, status="ok")
+    report.statement_symbols += 1

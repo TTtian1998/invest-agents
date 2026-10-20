@@ -25,6 +25,7 @@ app = typer.Typer(
     help="投资智库 zhiku：选股打分、回测、AI 审核、看板，以及触发线纪律。不接券商、不下单。",
 )
 factor_app = typer.Typer(add_completion=False, help="qlib 因子准备 / 训练 / 预测（可选 extra）。")
+data_app = typer.Typer(add_completion=False, help="全市场数据同步到 ZHIKU_KB/data（不进 git）。")
 
 
 def _die(msg: str, code: int = 1) -> None:
@@ -320,19 +321,17 @@ def screen_cmd(
     name: str = typer.Argument("all", help="greenblatt / piotroski / dividend / multifactor / all"),
 ) -> None:
     """运行经典选股公式，输出带分项的候选表。"""
-    from zhiku.events.pit import load_asof_universe
-    from zhiku.pipeline.daily import _fundamentals_path
     from zhiku.pipeline.settings import load_pipeline_settings
+    from zhiku.pipeline.universe import load_pipeline_universe
     from zhiku.screens.runner import SCREEN_FUNCS, run_screens
 
     paths: Paths = ctx.obj["paths"]
     settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
-    rows = load_asof_universe(
-        fundamentals_path=_fundamentals_path(paths),
-        pit_path=paths.fixtures / "pit_fundamentals.yaml",
-        delist_path=paths.fixtures / "delisted.yaml",
-        asof=now_shanghai().date(),
+    rows, _, notes = load_pipeline_universe(
+        paths, now_shanghai().date(), provider_kind=ctx.obj["provider_kind"], settings=settings
     )
+    for n in notes:
+        typer.echo(n, err=True)
     names = None if name == "all" else [name]
     if names and names[0] not in SCREEN_FUNCS:
         _die(f"未知公式 {name}，可选：{', '.join(SCREEN_FUNCS)} / all")
@@ -351,40 +350,62 @@ def backtest_cmd(
     ctx: typer.Context,
     screen: str = typer.Argument(..., help="公式名，或 trigger 回测触发线"),
 ) -> None:
-    """对选股公式做月度等权回测；`trigger` 回测跌破价位线。"""
-    from zhiku.backtest.engine import backtest_screen, backtest_trigger_line, load_price_panel
-    from zhiku.events.pit import drop_survivors, load_asof_universe, load_delist_map
-    from zhiku.pipeline.daily import _fundamentals_path
+    """对选股公式做月度等权回测；`trigger` 回测跌破价位线。live 用本地库价格。"""
+    from zhiku.backtest.engine import (
+        backtest_screen,
+        backtest_trigger_line,
+        load_price_panel,
+        load_price_panel_from_store,
+    )
+    from zhiku.events.pit import drop_survivors, load_delist_map
     from zhiku.pipeline.settings import load_pipeline_settings
+    from zhiku.pipeline.universe import load_pipeline_universe
     from zhiku.screens.runner import SCREEN_FUNCS, run_screens
 
     paths: Paths = ctx.obj["paths"]
-    price_file = paths.fixtures / "monthly_prices.csv"
-    if not price_file.is_file():
-        _die(f"找不到 {price_file}")
-    prices = load_price_panel(price_file)
     asof = now_shanghai().date()
-    delist = load_delist_map(paths.fixtures / "delisted.yaml")
+    settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
+    limit_up = limit_down = None
+    if ctx.obj["provider_kind"] == "live":
+        from zhiku.data.store import MarketStore
+
+        store = MarketStore(paths.data_dir)
+        prices = load_price_panel_from_store(store)
+        if prices.empty:
+            _die("本地库无日线，请先 zk data sync")
+        delist = store.delist_map()
+        limit_up, limit_down = store.limit_panels(list(prices.columns))
+    else:
+        price_file = paths.fixtures / "monthly_prices.csv"
+        if not price_file.is_file():
+            _die(f"找不到 {price_file}")
+        prices = load_price_panel(price_file)
+        delist = load_delist_map(paths.fixtures / "delisted.yaml")
     if delist:
         prices = drop_survivors(prices, delist, asof)
-    settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
     if screen == "trigger":
-        if "510300" not in prices.columns:
-            _die("触发线示例需要 510300 价格列")
-        result = backtest_trigger_line(prices["510300"], 3.80)
+        col = "510300" if "510300" in prices.columns else None
+        if col is None:
+            _die("触发线回测需要 510300 价格列（fixture 示例或已同步 ETF）")
+        result = backtest_trigger_line(prices[col], 3.80)
     else:
         if screen not in SCREEN_FUNCS:
             _die(f"未知公式 {screen}")
-        rows = load_asof_universe(
-            fundamentals_path=_fundamentals_path(paths),
-            pit_path=paths.fixtures / "pit_fundamentals.yaml",
-            delist_path=paths.fixtures / "delisted.yaml",
-            asof=asof,
+        rows, delist2, _notes = load_pipeline_universe(
+            paths, asof, provider_kind=ctx.obj["provider_kind"], settings=settings
         )
+        delist = delist or delist2
         bundle = run_screens(rows, settings, names=[screen])
         picks = [r.symbol for r in bundle.screens.get(screen, [])[: settings.backtest.top_n]]
         result = backtest_screen(
-            prices, picks, settings.backtest, screen=screen, delist=delist, asof=asof
+            prices,
+            picks,
+            settings.backtest,
+            screen=screen,
+            delist=delist,
+            asof=asof,
+            limit_up=limit_up,
+            limit_down=limit_down,
         )
     typer.echo(
         f"{result.screen} 年化={result.annualized} 回撤={result.max_drawdown} "
@@ -445,46 +466,69 @@ def ui_cmd(
 @factor_app.command("prepare")
 def factor_prepare(
     ctx: typer.Context,
-    qlib_dir: Path = typer.Option(Path("./qlib_data"), "--qlib-dir"),
+    qlib_dir: Optional[Path] = typer.Option(None, "--qlib-dir"),
 ) -> None:
-    """把本地 CSV 转为 qlib 格式（需 [qlib] extra）。"""
-    from zhiku.factors.qlib_adapter import QlibNotInstalled, prepare_from_csv
+    """把本地库日线转为 qlib bin；无库时尝试 fixtures CSV。"""
+    from zhiku.data.store import MarketStore
+    from zhiku.factors.qlib_adapter import prepare_from_csv, prepare_from_store
 
     paths: Paths = ctx.obj["paths"]
+    dest = qlib_dir or (paths.data_dir / "qlib")
+    store = MarketStore(paths.data_dir)
+    if not store.is_empty():
+        typer.echo(prepare_from_store(store, dest))
+        return
     try:
-        msg = prepare_from_csv(paths.fixtures, qlib_dir)
-    except QlibNotInstalled as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(0) from None
-    typer.echo(msg)
-
-
-@factor_app.command("train")
-def factor_train(
-    qlib_dir: Path = typer.Option(Path("./qlib_data"), "--qlib-dir"),
-    model: Path = typer.Option(Path("./kb/models/lgb_alpha158.pkl"), "--model"),
-) -> None:
-    """训练 Alpha158 + LightGBM 基线。"""
-    from zhiku.factors.qlib_adapter import QlibNotInstalled, train_alpha158
-
-    try:
-        msg = train_alpha158(qlib_dir, model)
-    except QlibNotInstalled as exc:
+        msg = prepare_from_csv(paths.fixtures, dest)
+    except FileNotFoundError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from None
     typer.echo(msg)
 
 
-@factor_app.command("predict")
-def factor_predict() -> None:
-    """输出 qlib 分数；未安装则空结果并提示降级。"""
-    from zhiku.factors.qlib_adapter import QLIB_HINT, predict_scores, qlib_available
+@factor_app.command("train")
+def factor_train(
+    ctx: typer.Context,
+    qlib_dir: Optional[Path] = typer.Option(None, "--qlib-dir"),
+    model: Optional[Path] = typer.Option(None, "--model"),
+) -> None:
+    """训练 Alpha158 + LightGBM（pyqlib 失败则 pandas+LightGBM）。"""
+    from zhiku.data.store import MarketStore
+    from zhiku.factors.qlib_adapter import QlibNotInstalled, train_model
 
-    scores = predict_scores(None, None)
-    if not qlib_available():
-        typer.echo(QLIB_HINT.strip(), err=True)
-        typer.echo("已降级：qlib 分数为空，流水线将只用公式分。")
+    paths: Paths = ctx.obj["paths"]
+    paths.ensure_runtime_dirs()
+    dest = qlib_dir or (paths.data_dir / "qlib")
+    model_path = model or (paths.models_dir / "lgb_alpha158.pkl")
+    store = MarketStore(paths.data_dir)
+    try:
+        msg = train_model(qlib_dir=dest, model_path=model_path, store=store)
+    except QlibNotInstalled as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from None
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"训练失败: {exc}", err=True)
+        raise typer.Exit(1) from None
+    typer.echo(msg)
+
+
+@factor_app.command("predict")
+def factor_predict(ctx: typer.Context) -> None:
+    """输出 qlib 分数；未训练则空结果并提示。"""
+    from zhiku.data.store import MarketStore
+    from zhiku.factors.qlib_adapter import model_status, predict_scores, qlib_available
+
+    paths: Paths = ctx.obj["paths"]
+    meta = model_status(paths.models_dir)
+    if meta.get("status") == "未训练":
+        typer.echo("未训练。请先 zk data sync && zk factor prepare && zk factor train。", err=True)
+        if not qlib_available():
+            from zhiku.factors.qlib_adapter import QLIB_HINT
+
+            typer.echo(QLIB_HINT.strip(), err=True)
         raise typer.Exit(0)
+    store = MarketStore(paths.data_dir)
+    scores = predict_scores(None, None, store=store, models_dir=paths.models_dir)
     typer.echo(scores or "{}")
 
 
@@ -545,7 +589,49 @@ def debate_cmd(symbol: str) -> None:
     typer.echo(message)
 
 
+@data_app.command("sync")
+def data_sync(
+    ctx: typer.Context,
+    universe: Optional[str] = typer.Option(None, "--universe", help="all / csi800 / csi300 / ..."),
+    years: Optional[int] = typer.Option(None, "--years"),
+    start: Optional[str] = typer.Option(None, "--start", help="YYYY-MM-DD"),
+    end: Optional[str] = typer.Option(None, "--end", help="YYYY-MM-DD"),
+    resume: bool = typer.Option(True, "--resume/--no-resume"),
+    sleep: Optional[float] = typer.Option(None, "--sleep", help="请求间隔秒"),
+    max_symbols: Optional[int] = typer.Option(None, "--max-symbols", help="调试上限"),
+    include_global: Optional[bool] = typer.Option(None, "--include-global/--skip-global"),
+) -> None:
+    """增量同步 A 股列表/成分/日线/财报到 ZHIKU_KB/data。可断点续传。"""
+    from zhiku.data.store import MarketStore
+    from zhiku.data.sync import sync_market
+    from zhiku.pipeline.settings import load_pipeline_settings
+
+    paths: Paths = ctx.obj["paths"]
+    paths.ensure_runtime_dirs()
+    settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
+    ds = settings.data
+    store = MarketStore(paths.data_dir)
+    report = sync_market(
+        store,
+        universe=universe or ds.universe,
+        start=_parse_date(start) if start else None,
+        end=_parse_date(end) if end else None,
+        years=years or ds.years,
+        resume=resume,
+        include_global=ds.include_global if include_global is None else include_global,
+        hk_lists=ds.hk_lists,
+        us_lists=ds.us_lists,
+        extra_symbols=ds.extra_symbols,
+        max_symbols=max_symbols,
+        sleep=sleep if sleep is not None else ds.sleep_seconds,
+        retries=ds.retries,
+        progress=lambda m: typer.echo(m, err=True),
+    )
+    typer.echo(report.summary())
+
+
 app.add_typer(factor_app, name="factor")
+app.add_typer(data_app, name="data")
 
 
 def run() -> None:

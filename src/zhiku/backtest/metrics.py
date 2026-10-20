@@ -124,8 +124,10 @@ def monthly_equal_weight(
     *,
     cost_bps: float = 10.0,
     slippage_bps: float = 5.0,
+    limit_up: pd.DataFrame | None = None,
+    limit_down: pd.DataFrame | None = None,
 ) -> tuple[pd.Series, float]:
-    """每月初等权再平衡 ``picks``。成本/滑点按换手从净值扣除。"""
+    """每月初等权再平衡 ``picks``。成本/滑点按换手从净值扣除。涨停不可买、跌停不可卖。"""
     px = prices.copy()
     px.index = pd.to_datetime(px.index)
     px = px.sort_index()
@@ -135,6 +137,8 @@ def monthly_equal_weight(
     month_ends = px.resample("ME").last().dropna(how="all")
     if month_ends.empty:
         month_ends = px.resample("M").last().dropna(how="all")
+    up = _align_limit(limit_up, month_ends.index, cols)
+    down = _align_limit(limit_down, month_ends.index, cols)
     nav_pts = []
     turnovers = []
     prev_w = pd.Series(0.0, index=cols)
@@ -142,10 +146,27 @@ def monthly_equal_weight(
     cost = (cost_bps + slippage_bps) / 10000.0
     for i, (dt, row) in enumerate(month_ends.iterrows()):
         avail = [c for c in cols if pd.notna(row.get(c))]
-        if not avail:
+        # 跌停：无法卖出，保留上期权重
+        stuck = []
+        if dt in down.index:
+            stuck = [c for c in cols if bool(down.loc[dt].get(c)) and float(prev_w.get(c, 0) or 0) > 0]
+        # 涨停：无法新买入
+        blocked = []
+        if dt in up.index:
+            blocked = [c for c in avail if bool(up.loc[dt].get(c))]
+        tradable = [c for c in avail if c not in blocked or c in stuck]
+        if not tradable and not stuck:
             nav_pts.append((dt, nav))
             continue
-        w = pd.Series(1.0 / len(avail), index=avail)
+        free = [c for c in tradable if c not in stuck]
+        stuck_weight = float(prev_w.reindex(stuck).fillna(0).sum()) if stuck else 0.0
+        remain = max(0.0, 1.0 - stuck_weight)
+        w = pd.Series(0.0, index=cols)
+        for c in stuck:
+            w[c] = float(prev_w.get(c, 0) or 0)
+        if free and remain > 0:
+            for c in free:
+                w[c] = remain / len(free)
         tw = 0.5 * float((w.reindex(cols).fillna(0) - prev_w.reindex(cols).fillna(0)).abs().sum())
         turnovers.append(tw)
         nav *= 1.0 - tw * cost
@@ -153,13 +174,23 @@ def monthly_equal_weight(
             prev_dt = month_ends.index[i - 1]
             prev_row = month_ends.loc[prev_dt]
             ret = 0.0
-            for c in avail:
+            held = [c for c in cols if float(prev_w.get(c, 0) or 0) > 0]
+            for c in held:
                 p0, p1 = prev_row.get(c), row.get(c)
                 if pd.notna(p0) and pd.notna(p1) and float(p0) != 0:
-                    ret += (1.0 / len(avail)) * (float(p1) / float(p0) - 1.0)
+                    ret += float(prev_w.get(c, 0) or 0) * (float(p1) / float(p0) - 1.0)
             nav *= 1.0 + ret
         prev_w = w.reindex(cols).fillna(0)
         nav_pts.append((dt, nav))
     series = pd.Series({d: v for d, v in nav_pts})
     avg_to = float(np.mean(turnovers)) if turnovers else 0.0
     return series, avg_to
+
+
+def _align_limit(mask: pd.DataFrame | None, index: pd.Index, cols: list[str]) -> pd.DataFrame:
+    if mask is None or mask.empty:
+        return pd.DataFrame(False, index=index, columns=cols)
+    m = mask.copy()
+    m.index = pd.to_datetime(m.index)
+    aligned = m.reindex(index).reindex(columns=cols).fillna(False)
+    return aligned.astype(bool)

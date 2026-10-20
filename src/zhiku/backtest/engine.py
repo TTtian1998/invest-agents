@@ -27,6 +27,17 @@ def load_price_panel(path: Path) -> pd.DataFrame:
     return panel
 
 
+def load_price_panel_from_store(store, symbols: list[str] | None = None, *, adjust: str = "qfq") -> pd.DataFrame:
+    from zhiku.data.store import MarketStore
+
+    if not isinstance(store, MarketStore):
+        return pd.DataFrame()
+    df = store.bars(symbols, adjust=adjust)
+    if df.empty:
+        return pd.DataFrame()
+    return store.price_panel(list(df["symbol"].unique()), adjust=adjust, field="close")
+
+
 def backtest_screen(
     prices: pd.DataFrame,
     picks: list[str],
@@ -36,6 +47,8 @@ def backtest_screen(
     benchmark: str | None = None,
     delist: dict[str, date] | None = None,
     asof: date | None = None,
+    limit_up: pd.DataFrame | None = None,
+    limit_down: pd.DataFrame | None = None,
 ) -> BacktestResult:
     panel = prices
     if delist:
@@ -44,7 +57,12 @@ def backtest_screen(
         panel = drop_survivors(panel, delist, asof or date.max)
     bench_col = benchmark or settings.benchmark
     nav, turnover = monthly_equal_weight(
-        panel, picks, cost_bps=settings.cost_bps, slippage_bps=settings.slippage_bps
+        panel,
+        picks,
+        cost_bps=settings.cost_bps,
+        slippage_bps=settings.slippage_bps,
+        limit_up=limit_up,
+        limit_down=limit_down,
     )
     bench_nav = None
     if bench_col in panel.columns:
@@ -61,6 +79,8 @@ def backtest_screen(
     notes.append(
         "财务截面须按公告日对齐（zhiku.events.pit.load_asof_universe）；价格面板按退市日截断，避免幸存者偏差。"
     )
+    if limit_up is not None or limit_down is not None:
+        notes.append("涨停不可买入、跌停不可卖出；成本与滑点按换手从净值扣除。")
     result = summarize_nav(
         nav,
         turnover=turnover,

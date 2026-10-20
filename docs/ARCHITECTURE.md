@@ -4,9 +4,21 @@
 
 ```mermaid
 flowchart TD
-  fixtures[Fixture / akshare / yfinance / 官方RSS] --> screens[选股公式]
-  screens --> merge[公式分 + 可选 qlib]
-  merge --> backtest[回测闸门]
+  ak[akshare / yfinance / baostock / tushare] --> sync[zk data sync]
+  sync --> store[ZHIKU_KB/data SQLite+parquet]
+  store --> liveUni[live 股票池 PIT 公告日]
+  fixtures[Fixture YAML/CSV] --> fixUni[fixture 股票池]
+  liveUni --> screens[选股公式]
+  fixUni --> screens
+  store --> prepare[zk factor prepare]
+  prepare --> qlibDir[qlib bin]
+  qlibDir --> train[zk factor train Alpha158+LGB]
+  store --> train
+  train --> models[ZHIKU_KB/models]
+  models --> merge[公式分 + qlib 分]
+  screens --> merge
+  store --> backtest[回测闸门 真实价+成本+涨跌停]
+  merge --> backtest
   backtest --> daily[zk daily]
   newsSrc[分级信源] --> news[新闻雷达]
   xWatch[X大V YAML名单] --> news
@@ -23,9 +35,10 @@ flowchart TD
 
 ## 包布局
 
+- `zhiku/data`：`zk data sync` 增量落地到 `ZHIKU_KB/data`（列表、指数成分、前复权/不复权日线、三张报表+公告日）。缺字段记 `MissingData`，不插值、不进 git。
 - `zhiku/screens`：Greenblatt / Piotroski / 低估值高分红 / 质量+动量，以及质量门槛。
-- `zhiku/factors`：与 qlib 的可选衔接；未安装则分数为空。
-- `zhiku/backtest`：pandas 月度等权，vectorbt 可选；财务按公告日 PIT 对齐，价格按退市日截断。
+- `zhiku/factors`：本地库 → qlib bin；Alpha158+LightGBM（无 pyqlib 则 pandas 特征+LGB）；没模型日报写「未训练」。
+- `zhiku/backtest`：live 用本地库价格；成本/滑点；涨停不可买、跌停不可卖；公告日 PIT + 退市截断。
 - `zhiku/news`：扫描、聚合、价量确认、**信源分级**、X 大V 跟踪、机会、分析层。
 - `zhiku/events`：预期差、新颖度/半衰期（历史事件研究估算）、拥挤度、产业链 YAML/CSV+地缘传导、失效/时间止损、黑天鹅协议、PIT 财务、只追加决策日志。应急模式对触发线禁加。
 - `zhiku/macro`：日历、预期差、事件剧本、传导链 YAML、事件窗口、利率近似。

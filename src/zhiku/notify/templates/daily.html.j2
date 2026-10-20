@@ -14,7 +14,7 @@
 </head>
 <body>
   <h1>zhiku 每日流水线 {{ daily.asof }}</h1>
-  <p class="note">研究与提醒工具，不构成投资建议。示例标的与财务数字均为虚构。</p>
+  <p class="note">研究与提醒工具，不构成投资建议。{% if daily.fictional is not defined or daily.fictional %}示例标的与财务数字均为虚构。{% else %}公开市场数据；不含持仓数量、成本、账户或个人信息。{% endif %}</p>
   {% if daily.notes %}
   <ul>{% for n in daily.notes %}<li>{{ n }}</li>{% endfor %}</ul>
   {% endif %}

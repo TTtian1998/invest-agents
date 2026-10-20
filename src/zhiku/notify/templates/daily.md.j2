@@ -1,6 +1,6 @@
 # 每日流水线 {{ daily.asof }}
 
-研究与提醒工具，不构成投资建议，不自动下单。示例标的与财务数字均为虚构。
+研究与提醒工具，不构成投资建议，不自动下单。{% if daily.fictional is not defined or daily.fictional %}示例标的与财务数字均为虚构。{% else %}公开市场数据；不含持仓数量、成本、账户或个人信息。{% endif %}
 
 ## 宏观锚点
 {% set m = daily.macro %}
@@ -75,6 +75,15 @@
 无入选新闻分析（低价值 {{ nws.low_value_count }} 条仅计数）。
 {% else %}
 无
+{% endif %}
+
+## qlib 因子
+{% set q = daily.qlib if daily.qlib is defined and daily.qlib else {} %}
+- 状态：{{ q.status or "未训练" }}
+- 训练日期：{{ q.trained_on or "未训练" }}
+- IC：{{ q.ic if q.ic is not none else "缺数据" }}；RankIC：{{ q.rank_ic if q.rank_ic is not none else "缺数据" }}
+{% if daily.universe_size %}
+- 股票池：{{ daily.universe_size }}；缺数据比例：{{ "%.1f"|format((daily.missing_ratio or 0) * 100) }}%
 {% endif %}
 
 ## 今日候选（公式分{% if daily.candidates and daily.candidates[0].qlib_score is not none %} + qlib{% endif %}）
