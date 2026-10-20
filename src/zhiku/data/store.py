@@ -153,6 +153,14 @@ class MarketStore:
             return None
         return date.fromisoformat(str(row[0])[:10])
 
+    def job_status(self, job: str, symbol: str) -> str | None:
+        with _connect(self.sqlite_path) as conn:
+            row = conn.execute(
+                "SELECT status FROM sync_state WHERE job=? AND symbol=?",
+                (job, symbol),
+            ).fetchone()
+        return str(row[0]) if row and row[0] else None
+
     def upsert_listings(self, rows: Iterable[dict[str, Any]]) -> int:
         payload = []
         for row in rows:
@@ -401,6 +409,9 @@ class MarketStore:
         end: date | None = None,
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
         df = self.bars(symbols, start=start, end=end, adjust="none")
+        if df.empty:
+            # 不复权未同步完时用前复权涨跌幅近似涨跌停，不编造缺失日
+            df = self.bars(symbols, start=start, end=end, adjust="qfq")
         if df.empty:
             return pd.DataFrame(), pd.DataFrame()
         up = df.pivot(index="date", columns="symbol", values="limit_up").fillna(0).astype(bool)

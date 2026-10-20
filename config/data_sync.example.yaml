@@ -9,3 +9,4 @@ include_global: true
 hk_lists: [hsi, hstech]
 us_lists: [sp500, ndx]
 extra_symbols: ["510300"]
+# zk data sync --workers 4  日线并行（baostock 子进程硬超时）

@@ -123,10 +123,11 @@ def build_fundamentals(
         if "yjbb" in stmts:
             income = dict(stmts.get("income") or {"payload": {}})
             payload = dict(income.get("payload") or {})
-            extra = stmts["yjbb"].get("payload") or {}
-            for k, v in extra.items():
-                if v is not None and v != "":
-                    payload[k] = v
+            yjbb_payload = stmts["yjbb"].get("payload") or {}
+            if isinstance(yjbb_payload, dict):
+                for k, v in yjbb_payload.items():
+                    if v is not None and v != "":
+                        payload[k] = v
             income["payload"] = payload
             stmts["income"] = income
         income_h = store.statements_history(symbol, "income", asof)

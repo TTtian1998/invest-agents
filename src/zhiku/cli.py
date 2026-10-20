@@ -600,6 +600,7 @@ def data_sync(
     sleep: Optional[float] = typer.Option(None, "--sleep", help="请求间隔秒"),
     max_symbols: Optional[int] = typer.Option(None, "--max-symbols", help="调试上限"),
     include_global: Optional[bool] = typer.Option(None, "--include-global/--skip-global"),
+    workers: int = typer.Option(4, "--workers", help="日线并行数（baostock 子进程）"),
 ) -> None:
     """增量同步 A 股列表/成分/日线/财报到 ZHIKU_KB/data。可断点续传。"""
     from zhiku.data.store import MarketStore
@@ -625,6 +626,7 @@ def data_sync(
         max_symbols=max_symbols,
         sleep=sleep if sleep is not None else ds.sleep_seconds,
         retries=ds.retries,
+        workers=workers,
         progress=lambda m: typer.echo(m, err=True),
     )
     typer.echo(report.summary())

@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from typing import Any, Callable
 
 from zhiku.models import MissingData
@@ -53,3 +55,28 @@ def retry_call(
             last = exc
             time.sleep(0.4 * (i + 1))
     return MissingData(f"重试失败: {last}", symbol=symbol, field=field)
+
+
+def call_with_timeout(
+    fn: Callable[..., Any],
+    timeout: float,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """线程超时；超时不杀线程，只放弃等待。挂死源请用子进程。"""
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(fn, *args, **kwargs).result(timeout=timeout)
+
+
+def timed_call(
+    fn: Callable[..., Any],
+    timeout: float,
+    *args: Any,
+    symbol: str | None = None,
+    field: str | None = None,
+    **kwargs: Any,
+) -> Any | MissingData:
+    try:
+        return call_with_timeout(fn, timeout, *args, **kwargs)
+    except FuturesTimeout:
+        return MissingData(f"{field or 'call'} 超时 {timeout:.0f}s", symbol=symbol, field=field)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Callable
@@ -12,9 +13,9 @@ from zhiku.data.fetchers import (
     INDEX_CSI,
     AkshareFetcher,
     MarketFetcher,
-    baostock_bars,
     tushare_bars,
 )
+from zhiku.data.retry import timed_call
 from zhiku.data.store import MarketStore
 from zhiku.models import MissingData
 
@@ -72,6 +73,7 @@ def sync_market(
     max_symbols: int | None = None,
     sleep: float | None = None,
     retries: int = 3,
+    workers: int = 1,
     progress: Progress | None = None,
 ) -> SyncReport:
     import time
@@ -81,19 +83,21 @@ def sync_market(
     start = start or date(end.year - years, end.month, end.day)
     fetcher = fetcher or AkshareFetcher(sleep=sleep, retries=retries)
     report = SyncReport(universe=universe, start=start, end=end)
+    workers = max(1, int(workers))
 
-    _sync_cn_meta(store, fetcher, end, report, progress)
+    listings_ok = store.last_ok("listings", "*")
+    if resume and listings_ok is not None and listings_ok >= end:
+        _log(progress, "列表/成分已是目标日，跳过刷新")
+    else:
+        _sync_cn_meta(store, fetcher, end, report, progress)
     symbols = _resolve_cn_symbols(store, universe, extra_symbols)
     if max_symbols is not None:
         symbols = symbols[: max(0, max_symbols)]
         report.notes.append(f"max_symbols={max_symbols}，实际 CN {len(symbols)} 只")
-    _log(progress, f"CN 同步标的 {len(symbols)} 只")
+    _log(progress, f"CN 同步标的 {len(symbols)} 只，workers={workers}")
 
-    for i, symbol in enumerate(symbols, 1):
-        if i == 1 or i % 50 == 0 or i == len(symbols):
-            _log(progress, f"日线 {i}/{len(symbols)} {symbol}")
-        _sync_cn_symbol_bars(store, fetcher, symbol, start, end, resume, report)
-
+    # 先前复权（回测/qlib），再财报（选股 PIT），最后不复权
+    _sync_cn_bars(store, fetcher, symbols, start, end, resume, report, "qfq", workers, progress)
     bulk_ok = _sync_bulk_financials(store, fetcher, start, end, resume, report, progress)
     if not bulk_ok:
         report.notes.append("整表财报不可用，回退到按代码拉三张报表（较慢）")
@@ -101,6 +105,7 @@ def sync_market(
             if i == 1 or i % 50 == 0 or i == len(symbols):
                 _log(progress, f"财报 {i}/{len(symbols)} {symbol}")
             _sync_cn_symbol_fin(store, fetcher, symbol, resume, report)
+    _sync_cn_bars(store, fetcher, symbols, start, end, resume, report, "none", workers, progress)
 
     if include_global:
         g_syms = _sync_global_lists(store, fetcher, end, hk_lists or ["hsi", "hstech"], us_lists or ["sp500", "ndx"], report, progress)
@@ -134,7 +139,7 @@ def _sync_cn_meta(
     progress: Progress | None,
 ) -> None:
     _log(progress, "同步 A 股列表 / 退市 / 停牌 / 指数成分 / 截面")
-    listings = fetcher.cn_listings()
+    listings = timed_call(fetcher.cn_listings, 45, field="listings")
     if isinstance(listings, MissingData):
         store.log_missing(None, "listings", end, listings.reason)
         report.notes.append(f"缺数据：A 股列表 {listings.reason}")
@@ -143,7 +148,7 @@ def _sync_cn_meta(
         store.upsert_listings(listings)
         store.set_state("listings", "*", last_ok=end, status="ok")
 
-    delisted = fetcher.cn_delisted()
+    delisted = timed_call(fetcher.cn_delisted, 45, field="delist")
     if isinstance(delisted, MissingData):
         store.log_missing(None, "delist", end, delisted.reason)
         report.notes.append(f"缺数据：退市列表 {delisted.reason}")
@@ -153,7 +158,7 @@ def _sync_cn_meta(
             if row.get("symbol") and row.get("delist_date"):
                 store.mark_delisted(row["symbol"], row["delist_date"], row.get("name"))
 
-    suspended = fetcher.cn_suspended(end)
+    suspended = timed_call(fetcher.cn_suspended, 30, end, field="suspended")
     if isinstance(suspended, MissingData):
         store.log_missing(None, "suspended", end, suspended.reason)
         report.missing += 1
@@ -163,7 +168,7 @@ def _sync_cn_meta(
         )
 
     for alias, code in INDEX_CSI.items():
-        members = fetcher.index_members(code)
+        members = timed_call(fetcher.index_members, 45, code, field=f"index:{alias}")
         if isinstance(members, MissingData):
             store.log_missing(None, f"index:{alias}", end, members.reason)
             report.notes.append(f"缺数据：指数 {alias} {members.reason}")
@@ -174,7 +179,7 @@ def _sync_cn_meta(
             [{"symbol": s, "market": "CN", "instrument": "etf" if is_cn_etf(s) else "stock"} for s in members]
         )
 
-    spot = fetcher.cn_spot()
+    spot = timed_call(fetcher.cn_spot, 45, field="spot")
     if isinstance(spot, MissingData):
         store.log_missing(None, "spot", end, spot.reason)
         report.notes.append(f"缺数据：行情截面 {spot.reason}")
@@ -215,8 +220,7 @@ def _quarter_ends(start: date, end: date) -> list[date]:
     if cur < start:
         cur = _next_quarter(cur)
     while cur <= end:
-        if cur.month in {6, 12}:
-            out.append(cur)
+        out.append(cur)
         cur = _next_quarter(cur)
     return out
 
@@ -251,7 +255,13 @@ def _sync_bulk_financials(
                 got += 1
                 continue
             _log(progress, f"整表财报 {kind} {period}")
-            raw = fetcher.bulk_financials(period, kind)
+            raw = timed_call(
+                fetcher.bulk_financials,
+                90,
+                period,
+                kind,
+                field=f"bulk:{kind}",
+            )
             if isinstance(raw, MissingData):
                 if "未提供整表财务" in (raw.reason or ""):
                     return False
@@ -280,6 +290,96 @@ def _sync_bulk_financials(
     return got > 0
 
 
+def _sync_cn_bars(
+    store: MarketStore,
+    fetcher: MarketFetcher,
+    symbols: list[str],
+    start: date,
+    end: date,
+    resume: bool,
+    report: SyncReport,
+    adjust: str,
+    workers: int,
+    progress: Progress | None,
+) -> None:
+    job = f"bars:{adjust}"
+    pending: list[tuple[str, date]] = []
+    for symbol in symbols:
+        if resume and store.job_status(job, symbol) == "missing":
+            report.missing += 1
+            continue
+        last = store.last_ok(job, symbol) if resume else None
+        if last and last >= end:
+            continue
+        fetch_start = start
+        if last:
+            fetch_start = max(start, _plus_one(last) or start)
+        pending.append((symbol, fetch_start))
+    _log(progress, f"{adjust} 日线待拉 {len(pending)}/{len(symbols)}")
+    if not pending:
+        return
+
+    def _fetch(item: tuple[str, date]):
+        symbol, fetch_start = item
+        raw = timed_call(
+            fetcher.cn_bars,
+            40,
+            symbol,
+            fetch_start,
+            end,
+            adjust,
+            symbol=symbol,
+            field=job,
+        )
+        if isinstance(raw, MissingData) and isinstance(fetcher, AkshareFetcher):
+            ts = tushare_bars(symbol, fetch_start, end, adjust)
+            if not isinstance(ts, MissingData):
+                report.used_fallback = "tushare"
+                raw = ts
+        return symbol, raw
+
+    done = 0
+    pool_n = min(workers, len(pending))
+    if pool_n <= 1:
+        iterator = (_fetch(item) for item in pending)
+        for symbol, raw in iterator:
+            done += 1
+            _commit_bars(store, job, symbol, end, raw, report)
+            if done == 1 or done % 5 == 0 or done == len(pending):
+                _log(progress, f"{adjust} 日线 {done}/{len(pending)} {symbol}")
+        return
+
+    with ThreadPoolExecutor(max_workers=pool_n) as pool:
+        futs = {pool.submit(_fetch, item): item[0] for item in pending}
+        for fut in as_completed(futs):
+            symbol = futs[fut]
+            try:
+                symbol, raw = fut.result()
+            except Exception as exc:  # noqa: BLE001
+                raw = MissingData(str(exc), symbol=symbol)
+            done += 1
+            _commit_bars(store, job, symbol, end, raw, report)
+            if done == 1 or done % 5 == 0 or done == len(pending):
+                _log(progress, f"{adjust} 日线 {done}/{len(pending)} {symbol}")
+
+
+def _commit_bars(
+    store: MarketStore,
+    job: str,
+    symbol: str,
+    end: date,
+    raw,
+    report: SyncReport,
+) -> None:
+    if isinstance(raw, MissingData):
+        store.log_missing(symbol, job, end, raw.reason)
+        store.set_state(job, symbol, last_ok=None, status="missing", error=raw.reason)
+        report.missing += 1
+        return
+    store.upsert_bars(raw)
+    store.set_state(job, symbol, last_ok=end, status="ok")
+
+
 def _sync_cn_symbol_bars(
     store: MarketStore,
     fetcher: MarketFetcher,
@@ -289,36 +389,9 @@ def _sync_cn_symbol_bars(
     resume: bool,
     report: SyncReport,
 ) -> None:
-    for adjust in ("qfq", "none"):
-        job = f"bars:{adjust}"
-        last = store.last_ok(job, symbol) if resume else None
-        fetch_start = start
-        if last and last >= end:
-            continue
-        if last:
-            fetch_start = max(start, _plus_one(last) or start)
-        raw = fetcher.cn_bars(symbol, fetch_start, end, adjust)
-        if isinstance(raw, MissingData):
-            raw = _fallback_cn_bars(symbol, fetch_start, end, adjust, report)
-        if isinstance(raw, MissingData):
-            store.log_missing(symbol, job, end, raw.reason)
-            store.set_state(job, symbol, last_ok=last, status="missing", error=raw.reason)
-            report.missing += 1
-            continue
-        store.upsert_bars(raw)
-        store.set_state(job, symbol, last_ok=end, status="ok")
-
-
-def _fallback_cn_bars(symbol: str, start: date, end: date, adjust: str, report: SyncReport):
-    raw = baostock_bars(symbol, start, end, adjust)
-    if not isinstance(raw, MissingData):
-        report.used_fallback = "baostock"
-        return raw
-    raw = tushare_bars(symbol, start, end, adjust)
-    if not isinstance(raw, MissingData):
-        report.used_fallback = "tushare"
-        return raw
-    return raw
+    """单标的入口（测试/兼容）。"""
+    _sync_cn_bars(store, fetcher, [symbol], start, end, resume, report, "qfq", 1, None)
+    _sync_cn_bars(store, fetcher, [symbol], start, end, resume, report, "none", 1, None)
 
 
 def _sync_cn_symbol_fin(

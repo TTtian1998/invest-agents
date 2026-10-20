@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import date
+from pathlib import Path
 from typing import Any, Callable
 
 import pandas as pd
@@ -16,7 +17,6 @@ from zhiku.data.codes import (
     is_cn_etf,
     limit_threshold,
     normalize_cn,
-    sina_code,
     yfinance_cn,
 )
 from zhiku.data.retry import retry_call
@@ -344,41 +344,16 @@ class AkshareFetcher(MarketFetcher):
             if not isinstance(bao, MissingData):
                 return bao
             errors.append("baostock failed")
-            sina = sina_code(code)
-            raw = self._ak(
-                ["stock_zh_a_daily"],
-                symbol=sina,
-                start_date=_yyyymmdd(start),
-                end_date=_yyyymmdd(end),
-                adjust=adj,
-                md_symbol=code,
-                field="bars",
-            )
-            if not isinstance(raw, MissingData):
-                out = _normalize_cn_bars(code, raw, adjust=adj_flag)
-                if not isinstance(out, MissingData):
-                    return out
-            errors.append("sina daily failed")
-            raw = self._ak(
-                ["stock_zh_a_hist_tx"],
-                symbol=sina,
-                start_date=start.isoformat(),
-                end_date=end.isoformat(),
-                adjust=adj,
-                md_symbol=code,
-                field="bars",
-            )
-            if not isinstance(raw, MissingData):
-                out = _normalize_cn_bars(code, raw, adjust=adj_flag)
-                if not isinstance(out, MissingData):
-                    return out
-            errors.append("tencent hist failed")
             yf = _yfinance_bars(yfinance_cn(code), start, end)
             if not isinstance(yf, MissingData):
                 yf = yf.copy()
                 yf["symbol"] = code
                 yf["market"] = "CN"
-                return yf[yf["adjust"] == ("qfq" if adj_flag == "qfq" else "none")] if "adjust" in yf.columns else yf
+                want = "qfq" if adj_flag == "qfq" else "none"
+                if "adjust" in yf.columns:
+                    yf = yf[yf["adjust"] == want]
+                if not yf.empty:
+                    return yf
             errors.append("yfinance failed")
         return MissingData("日线失败: " + "; ".join(errors), symbol=code)
 
@@ -759,38 +734,52 @@ def _yfinance_financials(symbol: str) -> dict[str, list[dict]] | MissingData:
     return out
 
 
-_BS_LOGGED_IN = False
-
-
 def baostock_bars(symbol: str, start: date, end: date, adjust: str) -> pd.DataFrame | MissingData:
-    global _BS_LOGGED_IN
-    try:
-        import baostock as bs
-    except Exception as exc:  # noqa: BLE001
-        return MissingData(f"baostock 不可用: {exc}", symbol=symbol)
+    """子进程拉 baostock：超时 terminate，避免登录连接被挂死请求拖垮。"""
+    import json
+    import subprocess
+    import sys
+
     code = normalize_cn(symbol)
     prefix = "sh" if code.startswith(("6", "9")) else "sz"
     adj = "1" if adjust == "qfq" else "3"
+    worker = Path(__file__).resolve().with_name("_bs_query.py")
+    if not worker.is_file():
+        return MissingData("缺少 baostock worker", symbol=symbol)
+    cmd = [
+        sys.executable,
+        str(worker),
+        f"{prefix}.{code}",
+        start.isoformat(),
+        end.isoformat(),
+        adj,
+    ]
     try:
-        if not _BS_LOGGED_IN:
-            lg = bs.login()
-            if lg.error_code != "0":
-                return MissingData(f"baostock 登录失败: {lg.error_msg}", symbol=symbol)
-            _BS_LOGGED_IN = True
-        rs = bs.query_history_k_data_plus(
-            f"{prefix}.{code}",
-            "date,open,high,low,close,volume,amount,turn,pctChg",
-            start_date=start.isoformat(),
-            end_date=end.isoformat(),
-            frequency="d",
-            adjustflag=adj,
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=18,
+            check=False,
         )
-        rows = []
-        while rs.error_code == "0" and rs.next():
-            rec = rs.get_row_data()
-            rows.append(rec)
+    except subprocess.TimeoutExpired:
+        return MissingData("baostock 超时", symbol=symbol)
     except Exception as exc:  # noqa: BLE001
         return MissingData(f"baostock 拉取失败: {exc}", symbol=symbol)
+    raw_text = (proc.stdout or "").strip()
+    if not raw_text:
+        err = (proc.stderr or "").strip()[:200]
+        return MissingData(f"baostock 无输出 {err}", symbol=symbol)
+    brace = raw_text.find("{")
+    if brace < 0:
+        return MissingData("baostock 输出无法解析", symbol=symbol)
+    try:
+        payload = json.loads(raw_text[brace:])
+    except json.JSONDecodeError:
+        return MissingData("baostock 输出无法解析", symbol=symbol)
+    if payload.get("error") and not payload.get("rows"):
+        return MissingData(f"baostock {payload.get('error')}", symbol=symbol)
+    rows = payload.get("rows") or []
     if not rows:
         return MissingData("日线为空", symbol=symbol)
     df = pd.DataFrame(rows, columns=["日期", "开盘", "最高", "最低", "收盘", "成交量", "成交额", "换手率", "涨跌幅"])

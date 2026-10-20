@@ -219,6 +219,40 @@ def test_resume_skips_completed(tmp_path: Path) -> None:
     )
     n2 = len([c for c in fetcher.calls if c.startswith("bars:600519:qfq")])
     assert n2 == n1
+    assert any(c.startswith("bars:600519:none") for c in fetcher.calls)
+
+
+def test_resume_skips_missing_bars(tmp_path: Path) -> None:
+    store = MarketStore(tmp_path / "data")
+    fetcher = FakeFetcher(fail_once="bars:600519:qfq")
+    sync_market(
+        store,
+        universe="csi800",
+        start=date(2026, 1, 5),
+        end=date(2026, 1, 10),
+        resume=False,
+        fetcher=fetcher,
+        include_global=False,
+        extra_symbols=[],
+        sleep=0,
+        workers=1,
+    )
+    assert store.job_status("bars:qfq", "600519") == "missing"
+    n1 = len([c for c in fetcher.calls if c.startswith("bars:600519:qfq")])
+    sync_market(
+        store,
+        universe="csi800",
+        start=date(2026, 1, 5),
+        end=date(2026, 1, 10),
+        resume=True,
+        fetcher=fetcher,
+        include_global=False,
+        extra_symbols=[],
+        sleep=0,
+        workers=1,
+    )
+    n2 = len([c for c in fetcher.calls if c.startswith("bars:600519:qfq")])
+    assert n2 == n1
 
 
 def test_missing_not_interpolated() -> None:
