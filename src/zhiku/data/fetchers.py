@@ -110,6 +110,10 @@ class MarketFetcher:
         return MissingData("未提供整表财务")
 
 
+_EM_HIST_FAILS = 0
+_EM_HIST_SKIP_AFTER = 3
+
+
 class AkshareFetcher(MarketFetcher):
     def __init__(
         self,
@@ -312,26 +316,30 @@ class AkshareFetcher(MarketFetcher):
             if not isinstance(bao, MissingData):
                 return bao
         else:
-            raw = retry_call(
-                lambda: self._caller(
-                    ["stock_zh_a_hist"],
+            global _EM_HIST_FAILS
+            if _EM_HIST_FAILS < _EM_HIST_SKIP_AFTER:
+                raw = retry_call(
+                    lambda: self._caller(
+                        ["stock_zh_a_hist"],
+                        symbol=code,
+                        period="daily",
+                        start_date=_yyyymmdd(start),
+                        end_date=_yyyymmdd(end),
+                        adjust=adj,
+                    ),
+                    retries=0,
+                    bucket="akshare-em",
+                    sleep=self.sleep,
                     symbol=code,
-                    period="daily",
-                    start_date=_yyyymmdd(start),
-                    end_date=_yyyymmdd(end),
-                    adjust=adj,
-                ),
-                retries=0,
-                bucket="akshare-em",
-                sleep=self.sleep,
-                symbol=code,
-                field="bars",
-            )
-            if not isinstance(raw, MissingData):
-                out = _normalize_cn_bars(code, raw, adjust=adj_flag)
-                if not isinstance(out, MissingData):
-                    return out
-            errors.append("eastmoney hist failed")
+                    field="bars",
+                )
+                if not isinstance(raw, MissingData):
+                    out = _normalize_cn_bars(code, raw, adjust=adj_flag)
+                    if not isinstance(out, MissingData):
+                        _EM_HIST_FAILS = 0
+                        return out
+                _EM_HIST_FAILS += 1
+                errors.append("eastmoney hist failed")
             bao = baostock_bars(code, start, end, adj_flag)
             if not isinstance(bao, MissingData):
                 return bao

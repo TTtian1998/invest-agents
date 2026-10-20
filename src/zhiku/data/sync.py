@@ -215,7 +215,8 @@ def _quarter_ends(start: date, end: date) -> list[date]:
     if cur < start:
         cur = _next_quarter(cur)
     while cur <= end:
-        out.append(cur)
+        if cur.month in {6, 12}:
+            out.append(cur)
         cur = _next_quarter(cur)
     return out
 
