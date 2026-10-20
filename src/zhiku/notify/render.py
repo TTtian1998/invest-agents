@@ -39,3 +39,15 @@ def write_report(reports_root: Path, on: date, kind: str, markdown: str) -> Path
     return path
 
 
+def latest_json(reports_root: Path, name: str) -> Path | None:
+    latest = reports_root / f"latest-{name}.json"
+    if latest.is_file():
+        return latest
+    files = sorted(reports_root.glob(f"*/*-zk-{name}.json"))
+    return files[-1] if files else None
+
+
+def latest_daily_json(reports_root: Path) -> Path | None:
+    return latest_json(reports_root, "daily")
+
+

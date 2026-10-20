@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "zhiku"
-version = "0.1.0"
-description = "把价位触发线、14:55/收盘确认、成长仓上限和周五命中率复盘代码化的个人投研工具"
+version = "0.2.0"
+description = "每日选股打分、回测验证、AI 审核与触发线纪律的个人投研工具"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -24,7 +24,12 @@ dependencies = [
 [project.optional-dependencies]
 stats = ["quantstats>=0.0.86"]
 debate = ["tradingagents @ git+https://github.com/TauricResearch/TradingAgents@v0.7.0"]
+qlib = ["pyqlib>=0.9", "lightgbm>=4"]
+backtest = ["vectorbt>=0.27"]
+ui = ["streamlit>=1.38"]
+masters = ["openai>=1.40"]
 dev = ["pytest>=8", "pytest-cov", "ruff", "mypy"]
+full = ["streamlit>=1.38", "vectorbt>=0.27", "quantstats>=0.0.86", "openai>=1.40"]
 
 [project.scripts]
 zk = "zhiku.cli:app"
@@ -34,6 +39,9 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/zhiku/notify/templates" = "zhiku/notify/templates"
+"src/zhiku/pipeline/default.yaml" = "zhiku/pipeline/default.yaml"
+"src/zhiku/macro/chains.yaml" = "zhiku/macro/chains.yaml"
+"src/zhiku/news/grades.yaml" = "zhiku/news/grades.yaml"
 
 [tool.pytest.ini_options]
 addopts = "-m \"not network\""
@@ -41,6 +49,8 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
   "network: 需要访问 akshare / yfinance 等在线行情的测试",
+  "qlib: 需要安装 pyqlib 的测试",
+  "heavy: 可选重依赖（vectorbt / streamlit / openai）",
 ]
 
 [tool.ruff]

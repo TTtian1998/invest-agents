@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <title>zhiku 每日流水线 {{ daily.asof }}</title>
+  <style>
+    body { font-family: sans-serif; margin: 24px; color: #1b1b1b; }
+    table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+    th, td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
+    th { background: #f4f4f4; }
+    .note { color: #555; }
+    h1, h2 { font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>zhiku 每日流水线 {{ daily.asof }}</h1>
+  <p class="note">研究与提醒工具，不构成投资建议。示例标的与财务数字均为虚构。</p>
+  {% if daily.notes %}
+  <ul>{% for n in daily.notes %}<li>{{ n }}</li>{% endfor %}</ul>
+  {% endif %}
+  <h2>宏观锚点</h2>
+  {% set m = daily.macro %}
+  {% if m %}
+  <p>地缘温度 {{ m.geo.temperature if m.geo else "缺数据" }}；利率来源 {{ m.rate_expectation.source if m.rate_expectation else "缺数据" }}</p>
+  <ul>
+    {% for e in m.calendar_7d %}<li>{{ e.name }} {{ e.scheduled_shanghai }} 重要度{{ e.importance }}</li>{% endfor %}
+  </ul>
+  {% else %}
+  <p class="note">缺数据：宏观模块未运行。</p>
+  {% endif %}
+  <h2>今日候选</h2>
+  <table>
+    <tr><th>代码</th><th>名称</th><th>总分</th><th>公式分</th><th>qlib</th><th>来源</th></tr>
+    {% for c in daily.candidates %}
+    <tr>
+      <td>{{ c.symbol }}</td><td>{{ c.name }}</td>
+      <td>{{ "%.1f"|format(c.total) }}</td>
+      <td>{{ "%.1f"|format(c.formula_score) }}</td>
+      <td>{{ c.qlib_score if c.qlib_score is not none else "缺数据" }}</td>
+      <td>{{ c.source }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <h2>回测</h2>
+  <table>
+    <tr><th>公式</th><th>年化</th><th>最大回撤</th><th>夏普</th><th>闸门</th></tr>
+    {% for name, bt in daily.backtests.items() %}
+    <tr>
+      <td>{{ name }}</td>
+      <td>{{ bt.annualized }}</td>
+      <td>{{ bt.max_drawdown }}</td>
+      <td>{{ bt.sharpe }}</td>
+      <td>{{ "通过" if bt.passed_gate else "未通过" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <h2>AI 审核</h2>
+  {% for a in daily.audits %}
+    <h3>{{ a.symbol }} {{ a.name }} — {{ a.conclusion }}</h3>
+    {% if a.skipped %}<p class="note">{{ a.skip_reason }}</p>{% endif %}
+    <ul>{% for o in a.opinions %}<li>{{ o.master }}：{{ o.stance }} — {{ o.rationale }}</li>{% endfor %}</ul>
+  {% endfor %}
+</body>
+</html>

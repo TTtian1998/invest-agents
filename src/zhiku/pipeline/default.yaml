@@ -1,0 +1,117 @@
+# 流水线默认参数。用户可在 ZHIKU_KB/config/pipeline.yaml 覆盖。
+# 以下阈值均为研究用默认值，不是投资建议。
+
+universe:
+  exclude_st: true
+  exclude_etf: true
+  min_mktcap_yi: 80          # 亿元人民币等值，低于则视为小市值题材，剔除
+  min_amount_cny:
+    CN: 300000000            # A 股日均成交额 ≥ 3 亿
+    HK: 100000000            # 港股 ≥ 1 亿人民币等值
+    US: 100000000
+
+quality:
+  roe_3y_min: 0.12
+  ocf_positive: true
+  max_debt_asset: 0.70
+  pe_percentile_max: 0.80    # 估值不在历史高位
+  pb_percentile_max: 0.80
+  require_leader_or_roe: true
+
+greenblatt:
+  # Joel Greenblatt《The Little Book That Beats the Market》：ROC + Earnings Yield 排名合成
+  top_n: 30
+  min_score: 0
+
+piotroski:
+  # Piotroski (2000) F-Score，9 项
+  min_score: 7
+  top_n: 30
+
+dividend:
+  pe_percentile_max: 0.40
+  pb_percentile_max: 0.40
+  min_yield: 0.03
+  min_consecutive_years: 3
+  top_n: 30
+
+multifactor:
+  weights:
+    roe: 0.25
+    gm_stability: 0.15
+    ocf_ni: 0.20
+    momentum_12_1: 0.25
+    low_vol: 0.15
+  top_n: 30
+
+merge:
+  formula: 0.6
+  qlib: 0.4
+
+backtest:
+  rebalance: monthly
+  equal_weight: true
+  cost_bps: 10
+  slippage_bps: 5
+  rf: 0.02
+  benchmark: "510300"
+  min_sharpe: 0.0            # 示例数据较短，默认不因夏普挡掉公式
+  require_beat_benchmark: false
+  top_n: 3
+
+ai:
+  top_n: 15
+  masters: [buffett, munger, graham, lynch]
+
+news:
+  enabled: true
+  stop_pct: 0.03
+  max_quality: 5
+  max_trade: 5
+  max_watch: 8
+  max_notional_cny: 50000
+  low_corr_bonus: 0.08
+  poll_seconds: 300
+  unused_thr: 0.01
+  over_thr: 0.04
+  score_weights:
+    catalyst: 0.22
+    hist_winrate: 0.18
+    price_confirm: 0.18
+    quality: 0.15
+    correlation: 0.09
+    source: 0.18
+  sources:
+    eastmoney_news: true
+    cls: true
+    cninfo: true
+    eastmoney_hot: true
+    lhb: true
+    ratings: true
+    yfinance_news: true
+    finnhub: true
+    rss: true
+    apewisdom: true
+    twitter: true
+    official_rss: true
+    edgar: true
+  official_feeds:
+    fed: https://www.federalreserve.gov/feeds/press_all.xml
+    bls: https://www.bls.gov/feed/bls_latest.rss
+    ecb: https://www.ecb.europa.eu/rss/press.html
+
+macro:
+  enabled: true
+  freeze_adds_in_window: false
+  window_hint: 事件窗口内，新开仓降仓位/止损放宽或等落地
+  min_window_importance: 4
+  gdelt_enabled: false
+  fedwatch_approx: true
+  horizon_days: 7
+  windows:
+    FOMC: {before: 1, after: 1}
+    US_NFP: {before: 1, after: 1}
+    US_CPI: {before: 1, after: 1}
+    US_CORE_CPI: {before: 1, after: 1}
+    US_PCE: {before: 1, after: 1}
+    default: {before: 1, after: 1}

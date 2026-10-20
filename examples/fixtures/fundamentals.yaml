@@ -1,0 +1,322 @@
+# 虚构财务截面，仅供离线 demo / 单测。不是任何真实公司财报或个人持仓。
+stocks:
+  - symbol: "000333"
+    market: CN
+    name: 示例家电个股
+    industry: 家电
+    instrument: stock
+    industry_leader: true
+    st: false
+    delist_risk: false
+    mktcap: 320000000000
+    amount_avg: 4200000000
+    pe: 14.5
+    pb: 2.4
+    pe_percentile: 0.32
+    pb_percentile: 0.28
+    dividend_yield: 0.034
+    dividend_years: 8
+    roe: 0.22
+    roe_3y: [0.20, 0.21, 0.22]
+    roa: 0.11
+    roa_prev: 0.09
+    gross_margin: 0.31
+    gross_margin_prev: 0.29
+    gross_margin_3y: [0.28, 0.29, 0.31]
+    ebit: 48000000000
+    nwc: 18000000000
+    nfa: 72000000000
+    ev: 360000000000
+    ocf: 52000000000
+    net_income: 40000000000
+    debt_asset: 0.48
+    lt_debt_asset: 0.18
+    lt_debt_asset_prev: 0.22
+    current_ratio: 1.45
+    current_ratio_prev: 1.30
+    shares_issued: false
+    asset_turnover: 0.92
+    asset_turnover_prev: 0.84
+    momentum_12_1: 0.18
+    volatility: 0.21
+
+  - symbol: "600519"
+    market: CN
+    name: 示例白酒个股
+    industry: 白酒
+    instrument: stock
+    industry_leader: true
+    st: false
+    delist_risk: false
+    mktcap: 1800000000000
+    amount_avg: 8000000000
+    pe: 28.0
+    pb: 8.5
+    pe_percentile: 0.55
+    pb_percentile: 0.60
+    dividend_yield: 0.022
+    dividend_years: 12
+    roe: 0.30
+    roe_3y: [0.28, 0.29, 0.30]
+    roa: 0.18
+    roa_prev: 0.17
+    gross_margin: 0.90
+    gross_margin_prev: 0.89
+    gross_margin_3y: [0.88, 0.89, 0.90]
+    ebit: 90000000000
+    nwc: 40000000000
+    nfa: 80000000000
+    ev: 1900000000000
+    ocf: 88000000000
+    net_income: 75000000000
+    debt_asset: 0.22
+    lt_debt_asset: 0.05
+    lt_debt_asset_prev: 0.06
+    current_ratio: 2.10
+    current_ratio_prev: 1.95
+    shares_issued: false
+    asset_turnover: 0.55
+    asset_turnover_prev: 0.52
+    momentum_12_1: 0.08
+    volatility: 0.19
+
+  - symbol: "000858"
+    market: CN
+    name: 示例消费个股
+    industry: 白酒
+    instrument: stock
+    industry_leader: false
+    st: false
+    delist_risk: false
+    mktcap: 500000000000
+    amount_avg: 2500000000
+    pe: 18.0
+    pb: 4.0
+    pe_percentile: 0.40
+    pb_percentile: 0.42
+    dividend_yield: 0.031
+    dividend_years: 6
+    roe: 0.16
+    roe_3y: [0.15, 0.15, 0.16]
+    roa: 0.09
+    roa_prev: 0.08
+    gross_margin: 0.72
+    gross_margin_prev: 0.70
+    gross_margin_3y: [0.69, 0.70, 0.72]
+    ebit: 30000000000
+    nwc: 25000000000
+    nfa: 90000000000
+    ev: 560000000000
+    ocf: 28000000000
+    net_income: 24000000000
+    debt_asset: 0.30
+    lt_debt_asset: 0.10
+    lt_debt_asset_prev: 0.12
+    current_ratio: 1.80
+    current_ratio_prev: 1.60
+    shares_issued: false
+    asset_turnover: 0.48
+    asset_turnover_prev: 0.45
+    momentum_12_1: 0.05
+    volatility: 0.24
+
+  - symbol: "601318"
+    market: CN
+    name: 示例保险个股
+    industry: 保险
+    instrument: stock
+    industry_leader: true
+    st: false
+    delist_risk: false
+    mktcap: 700000000000
+    amount_avg: 3100000000
+    pe: 9.5
+    pb: 0.95
+    pe_percentile: 0.22
+    pb_percentile: 0.18
+    dividend_yield: 0.048
+    dividend_years: 10
+    roe: 0.14
+    roe_3y: [0.13, 0.14, 0.14]
+    roa: 0.03
+    roa_prev: 0.025
+    gross_margin: 0.20
+    gross_margin_prev: 0.19
+    gross_margin_3y: [0.18, 0.19, 0.20]
+    ebit: 120000000000
+    nwc: 50000000000
+    nfa: 200000000000
+    ev: 900000000000
+    ocf: 150000000000
+    net_income: 110000000000
+    debt_asset: 0.62
+    lt_debt_asset: 0.25
+    lt_debt_asset_prev: 0.28
+    current_ratio: 1.15
+    current_ratio_prev: 1.05
+    shares_issued: false
+    asset_turnover: 0.22
+    asset_turnover_prev: 0.20
+    momentum_12_1: 0.04
+    volatility: 0.18
+
+  - symbol: "000001"
+    market: CN
+    name: 示例银行个股
+    industry: 银行
+    instrument: stock
+    industry_leader: false
+    st: false
+    delist_risk: false
+    mktcap: 200000000000
+    amount_avg: 1500000000
+    pe: 5.5
+    pb: 0.60
+    pe_percentile: 0.15
+    pb_percentile: 0.12
+    dividend_yield: 0.055
+    dividend_years: 9
+    roe: 0.10
+    roe_3y: [0.10, 0.10, 0.10]
+    roa: 0.008
+    roa_prev: 0.009
+    gross_margin: 0.40
+    gross_margin_prev: 0.41
+    ebit: 80000000000
+    nwc: 0
+    nfa: 400000000000
+    ev: 250000000000
+    ocf: 20000000000
+    net_income: 35000000000
+    debt_asset: 0.92
+    lt_debt_asset: 0.40
+    lt_debt_asset_prev: 0.38
+    current_ratio: 0.90
+    current_ratio_prev: 0.95
+    shares_issued: true
+    asset_turnover: 0.04
+    asset_turnover_prev: 0.04
+    momentum_12_1: -0.02
+    volatility: 0.16
+
+  - symbol: "300001"
+    market: CN
+    name: 示例题材个股
+    industry: 主题
+    instrument: stock
+    industry_leader: false
+    st: false
+    delist_risk: false
+    mktcap: 2500000000
+    amount_avg: 80000000
+    pe: 80.0
+    pb: 12.0
+    pe_percentile: 0.96
+    pb_percentile: 0.94
+    dividend_yield: 0.0
+    dividend_years: 0
+    roe: 0.04
+    roe_3y: [0.02, 0.03, 0.04]
+    roa: -0.01
+    roa_prev: 0.01
+    ebit: 50000000
+    nwc: 800000000
+    nfa: 400000000
+    ev: 4000000000
+    ocf: -20000000
+    net_income: 10000000
+    debt_asset: 0.75
+    momentum_12_1: 0.40
+    volatility: 0.55
+
+  - symbol: "AAPL"
+    market: US
+    name: 示例美股
+    industry: 科技
+    instrument: stock
+    industry_leader: true
+    st: false
+    delist_risk: false
+    mktcap: 3200000000000
+    amount_avg: 12000000000
+    fx_to_cny: 7.20
+    pe: 30.0
+    pb: 45.0
+    pe_percentile: 0.62
+    pb_percentile: 0.70
+    dividend_yield: 0.005
+    dividend_years: 12
+    roe: 1.50
+    roe_3y: [1.40, 1.45, 1.50]
+    roa: 0.28
+    roa_prev: 0.26
+    gross_margin: 0.46
+    gross_margin_prev: 0.44
+    gross_margin_3y: [0.43, 0.44, 0.46]
+    ebit: 120000000000
+    nwc: -20000000000
+    nfa: 40000000000
+    ev: 3300000000000
+    ocf: 110000000000
+    net_income: 95000000000
+    debt_asset: 0.55
+    lt_debt_asset: 0.30
+    lt_debt_asset_prev: 0.32
+    current_ratio: 1.05
+    current_ratio_prev: 0.98
+    shares_issued: false
+    asset_turnover: 1.10
+    asset_turnover_prev: 1.05
+    momentum_12_1: 0.22
+    volatility: 0.20
+
+  - symbol: "0700.HK"
+    market: HK
+    name: 示例港股
+    industry: 互联网
+    instrument: stock
+    industry_leader: true
+    st: false
+    delist_risk: false
+    mktcap: 3200000000000
+    amount_avg: 8000000000
+    fx_to_cny: 0.92
+    pe: 16.0
+    pb: 3.2
+    pe_percentile: 0.38
+    pb_percentile: 0.35
+    dividend_yield: 0.008
+    dividend_years: 4
+    roe: 0.18
+    roe_3y: [0.16, 0.17, 0.18]
+    roa: 0.09
+    roa_prev: 0.08
+    gross_margin: 0.50
+    gross_margin_prev: 0.48
+    gross_margin_3y: [0.47, 0.48, 0.50]
+    ebit: 150000000000
+    nwc: 60000000000
+    nfa: 180000000000
+    ev: 3400000000000
+    ocf: 160000000000
+    net_income: 120000000000
+    debt_asset: 0.40
+    lt_debt_asset: 0.15
+    lt_debt_asset_prev: 0.17
+    current_ratio: 1.30
+    current_ratio_prev: 1.20
+    shares_issued: false
+    asset_turnover: 0.45
+    asset_turnover_prev: 0.42
+    momentum_12_1: 0.15
+    volatility: 0.28
+
+  - symbol: "510300"
+    market: CN
+    name: 示例宽基ETF
+    instrument: etf
+    st: false
+    mktcap: 300000000000
+    amount_avg: 9000000000
+    pe: null
+    pb: null

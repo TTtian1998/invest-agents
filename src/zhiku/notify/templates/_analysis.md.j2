@@ -1,0 +1,29 @@
+{% for a in cards %}
+### {{ a.subject }}
+{% if a.source_grade_label %}
+- **信源等级**：{{ a.source_grade_label }}
+{% endif %}
+{% if a.mark %}
+*{{ a.mark }}（引擎 {{ a.engine }}）*
+{% endif %}
+- **意味着什么（so_what）**：{{ a.so_what }}
+- **是否已被消化（priced_in）**：{{ a.priced_in }}
+- **影响（impact）**：{{ a.impact }}
+- **反方（counter_view）**：{{ a.counter_view }}
+- **下一验证节点（next_check）**：{{ a.next_check }}
+- **置信度（confidence）**：{{ a.confidence }}
+{% if a.claims %}
+- **事实 / 解读 / 推测**：
+{% for c in a.claims %}
+  - 〔{{ c.kind }}〕{{ c.text }}
+{% endfor %}
+{% endif %}
+{% if a.institution_review %}
+- **三级辩证审查**
+  - 立场与利益冲突：{{ a.institution_review.institution_stance }}
+  - 历史命中率：{{ a.institution_review.track_record }}
+  - 核心假设：{{ a.institution_review.key_assumptions }}
+  - 与一致预期缺口：{{ a.institution_review.consensus_gap }}
+  - 反方：{{ a.institution_review.counter_view }}
+{% endif %}
+{% endfor %}

@@ -1,0 +1,118 @@
+# 每日流水线 {{ daily.asof }}
+
+研究与提醒工具，不构成投资建议，不自动下单。示例标的与财务数字均为虚构。
+
+## 宏观锚点
+{% set m = daily.macro %}
+{% if m %}
+- 地缘温度：{{ m.geo.temperature if m.geo else "缺数据" }}；GPR {{ m.geo.gpr if m.geo and m.geo.gpr is not none else "缺数据" }}
+- 利率预期：{{ m.rate_expectation.source if m.rate_expectation else "缺数据" }}；降息概率 {{ m.rate_expectation.cut_25_prob if m.rate_expectation and m.rate_expectation.cut_25_prob is not none else "缺数据" }}
+{% if m.window_banners %}
+{% for w in m.window_banners %}
+- {{ w }}
+{% endfor %}
+{% endif %}
+
+### 未来 7 天
+{% for e in m.calendar_7d %}
+- {{ e.name }} 重要度{{ e.importance }}｜{{ e.scheduled_shanghai }}｜{{ e.sessions | join("、") }}
+{% endfor %}
+{% if not m.calendar_7d %}
+缺数据。
+{% endif %}
+
+### 昨日已发布
+{% for e in m.released %}
+- {{ e.name }}：预期 {{ e.consensus if e.consensus is not none else "缺数据" }} / 实际 {{ e.actual if e.actual is not none else "缺数据" }}；z={{ e.surprise_z if e.surprise_z is not none else e.surprise_missing or "缺数据" }}
+{% endfor %}
+{% if not m.released %}
+无。
+{% endif %}
+
+### 锚定资产
+{% for a in m.anchors %}
+- {{ a.label }}：{{ a.price if a.price is not none else a.missing or "缺数据" }}
+{% endfor %}
+
+### 事件分析（摘要）
+{% if m.analyses %}
+{% with cards = m.analyses %}
+{% include "_analysis.md.j2" %}
+{% endwith %}
+{% else %}
+无
+{% endif %}
+{% else %}
+缺数据：宏观模块未运行。
+{% endif %}
+
+{% if daily.notes %}
+## 运行备注
+{% for n in daily.notes %}
+- {{ n }}
+{% endfor %}
+{% endif %}
+
+## 舆情分析摘要
+{% set nws = daily.news %}
+{% if nws and nws.analyses %}
+低价值未展开 {{ nws.low_value_count }} 条。
+{% with cards = nws.analyses %}
+{% include "_analysis.md.j2" %}
+{% endwith %}
+{% elif nws %}
+无入选新闻分析（低价值 {{ nws.low_value_count }} 条仅计数）。
+{% else %}
+无
+{% endif %}
+
+## 今日候选（公式分{% if daily.candidates and daily.candidates[0].qlib_score is not none %} + qlib{% endif %}）
+
+{% for c in daily.candidates %}
+- **{{ c.symbol }}** {{ c.name }} 总分 {{ "%.1f"|format(c.total) }}（公式 {{ "%.1f"|format(c.formula_score) }}{% if c.qlib_score is not none %} / qlib {{ "%.1f"|format(c.qlib_score) }}{% endif %} / 来源 {{ c.source }}）
+  - 分项：{% for k, v in c.screens.items() %}{{ k }}={{ "%.1f"|format(v) }} {% endfor %}
+{% endfor %}
+{% if not daily.candidates %}
+今日无候选（可能全部未过优质门槛或回测闸门）。
+{% endif %}
+
+## 各公式榜单
+{% for name, rows in daily.screens.items() %}
+### {{ name }}{% if name in daily.gated_out %}（回测未达标，未进候选）{% endif %}
+{% for r in rows %}
+- {{ r.symbol }} {{ r.name }}  {{ "%.1f"|format(r.score) }}
+{% endfor %}
+{% if not rows %}
+- （空）
+{% endif %}
+{% endfor %}
+
+## 回测摘要
+{% for name, bt in daily.backtests.items() %}
+- **{{ name }}**：年化 {{ bt.annualized }}；最大回撤 {{ bt.max_drawdown }}；夏普 {{ bt.sharpe }}；胜率 {{ bt.win_rate }}；换手 {{ bt.turnover }}；是否跑赢基准 {{ bt.beat_benchmark }}；闸门 {{ "通过" if bt.passed_gate else "未通过" }}
+{% endfor %}
+{% if not daily.backtests %}
+无回测（缺价格面板）。
+{% endif %}
+
+## AI 审核
+{% for a in daily.audits %}
+### {{ a.symbol }} {{ a.name }} — {{ a.conclusion }}
+{% if a.skipped %}
+- {{ a.skip_reason }}
+{% endif %}
+{% for o in a.opinions %}
+- {{ o.master }}：{{ o.stance }} — {{ o.rationale }}
+{% endfor %}
+{% if a.debate %}
+- 辩论：{{ a.debate }}
+{% endif %}
+{% endfor %}
+{% if not daily.audits %}
+无审核对象。
+{% endif %}
+
+## 未过优质门槛
+{% for q in daily.quality_rejected %}
+- {{ q.symbol }}：{{ q.reasons | join("；") }}
+{% endfor %}

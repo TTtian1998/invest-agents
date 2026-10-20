@@ -1,0 +1,10 @@
+# 虚构利率预期。live 模式将尝试联邦基金期货近似，并标明非 CME 官方。
+meeting: "2026-10-29 FOMC"
+asof: "2026-10-20"
+implied_rate: 4.00
+current_rate: 4.25
+hike_25_prob: 0.05
+cut_25_prob: 0.35
+hold_prob: 0.60
+source: "fixture（虚构样本；live 时用联邦基金期货近似，非 CME FedWatch 官方）"
+note: "概率为演示用线性映射，不是官方 FedWatch。"

@@ -1,0 +1,117 @@
+# 信源等级。用户可在 ZHIKU_KB/config/source_grades.yaml 覆盖。
+# 1 官方第一手  2 大媒体  3 投资机构  4 社交/自媒体（只作情绪）
+grades:
+  1:
+    label: 一级·官方第一手
+    weight: 1.45
+    aliases:
+      - fed
+      - federalreserve
+      - federal reserve
+      - bls
+      - bea
+      - treasury
+      - us treasury
+      - edgar
+      - sec
+      - pboc
+      - pbc
+      - 人民银行
+      - 央行
+      - nbs
+      - stats.gov
+      - 国家统计局
+      - csrc
+      - 证监会
+      - cninfo
+      - 巨潮
+      - sse
+      - szse
+      - hkex
+      - 上交所
+      - 深交所
+      - 港交所
+      - company
+      - 公司公告
+      - ndrc
+      - 发改委
+      - mofcom
+      - 商务部
+      - 国务院
+      - gov.cn
+      - ecb
+      - boj
+      - bank of japan
+      - opec
+      - eia
+    rss:
+      fed: https://www.federalreserve.gov/feeds/press_all.xml
+      bls: https://www.bls.gov/feed/bls_latest.rss
+      ecb: https://www.ecb.europa.eu/rss/press.html
+  2:
+    label: 二级·大媒体
+    weight: 1.05
+    exclusive_bonus: 0.25
+    exclusive_aliases: [bloomberg, reuters, 彭博, 路透]
+    aliases:
+      - bloomberg
+      - 彭博
+      - reuters
+      - 路透
+      - wsj
+      - wall street journal
+      - ft
+      - financial times
+      - cnbc
+      - 财新
+      - caixin
+      - 第一财经
+      - yicai
+      - 证券时报
+      - stcn
+      - cls
+      - 财联社
+      - eastmoney
+      - rss
+      - yfinance
+      - finnhub
+    paywall_aliases: [wsj, ft, bloomberg, 财新]
+  3:
+    label: 三级·投资机构
+    weight: 0.55
+    aliases:
+      - ratings
+      - rating
+      - broker
+      - 券商
+      - 研报
+      - goldman
+      - morgan stanley
+      - jpmorgan
+      - citi
+      - 中金
+      - 中信
+      - 华泰
+      - 高盛
+  4:
+    label: 情绪·社交/自媒体
+    weight: 0.28
+    aliases:
+      - twitter
+      - x
+      - apewisdom
+      - reddit
+      - eastmoney_hot
+      - 人气榜
+      - weibo
+      - 自媒体
+
+unofficial_markers:
+  - 据知情人士
+  - 知情人士
+  - 消息人士
+  - people familiar
+  - sources say
+  - according to sources
+  - 不愿具名
+  - unnamed sources

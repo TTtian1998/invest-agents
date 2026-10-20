@@ -1,0 +1,32 @@
+# 虚构新闻催化事件研究样本，用于自学习权重。不是真实回测。
+samples:
+  - catalyst: earnings_beat
+    source: eastmoney
+    t1: 0.018
+    t5: 0.025
+    t20: 0.01
+  - catalyst: earnings_beat
+    source: cninfo
+    t1: 0.012
+    t5: 0.02
+    t20: 0.004
+  - catalyst: buyback
+    source: yfinance
+    t1: 0.008
+    t5: 0.01
+    t20: 0.006
+  - catalyst: policy
+    source: cls
+    t1: -0.004
+    t5: 0.002
+    t20: 0.0
+  - catalyst: sentiment_hot
+    source: eastmoney_hot
+    t1: -0.01
+    t5: -0.018
+    t20: -0.02
+  - catalyst: rating_down
+    source: ratings
+    t1: -0.015
+    t5: -0.02
+    t20: -0.01

@@ -14,7 +14,10 @@
 | [Jinja2](https://github.com/pallets/jinja) | markdown 报告模板 | BSD-3-Clause |
 | [PyYAML](https://github.com/yaml/pyyaml) | 规则 / 持仓 YAML | MIT |
 | [pandas](https://github.com/pandas-dev/pandas) | 表格处理 | BSD-3-Clause |
-| [quantstats](https://github.com/ranaroussi/quantstats) | 可选绩效统计（`[stats]` extra，MVP 未接入执行路径） | Apache-2.0 |
+| [quantstats](https://github.com/ranaroussi/quantstats) | 可选绩效统计（`[stats]` extra） | Apache-2.0 |
+| [streamlit](https://github.com/streamlit/streamlit) | 可选本地看板（`[ui]` extra） | Apache-2.0 |
+| [qlib](https://github.com/microsoft/qlib) | 可选 Alpha158 因子（`[qlib]` extra） | MIT |
+| [vectorbt](https://github.com/polakowo/vectorbt) | 可选回测（`[backtest]` extra） | Apache-2.0 |
 
 TradingAgents 与 TradingAgents-astock 在 PyPI / 导入名上都叫 `tradingagents`，**不要**写进同一环境。A 股辩论请另开虚拟环境安装：
 

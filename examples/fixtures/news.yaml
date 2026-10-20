@@ -1,0 +1,120 @@
+# 虚构新闻与价量反应。不是真实公告，也不含任何真实持仓细节。
+items:
+  - id: n1
+    source: eastmoney
+    source_kind: media
+    symbol: "000333"
+    name: 示例家电个股
+    market: CN
+    headline: "示例家电发布业绩快报：利润好于预期"
+    url: "https://example.invalid/n1"
+    published: "2026-10-20T08:10:00+08:00"
+    summary: "虚构快报，仅供离线测试。"
+    catalyst: earnings_beat
+  - id: n1b
+    source: cninfo
+    source_kind: official
+    symbol: "000333"
+    name: 示例家电个股
+    market: CN
+    headline: "示例家电：2026年三季报业绩快报"
+    url: "https://example.invalid/n1b"
+    published: "2026-10-20T08:00:00+08:00"
+    catalyst: earnings_beat
+  - id: n2
+    source: yfinance
+    source_kind: media
+    symbol: "AAPL"
+    name: 示例美股
+    market: US
+    headline: "Example Co announces additional buyback"
+    url: "https://example.invalid/n2"
+    published: "2026-10-20T06:00:00+08:00"
+    catalyst: buyback
+  - id: n3
+    source: cls
+    source_kind: media
+    symbol: null
+    name: ""
+    headline: "FOMC 将于本周议息，市场关注点阵图"
+    url: "https://example.invalid/n3"
+    published: "2026-10-20T07:30:00+08:00"
+    catalyst: policy
+  - id: n4
+    source: rss
+    source_kind: media
+    headline: "虚构：霍尔木兹海峡过境扰动引发原油关注"
+    url: "https://example.invalid/n4"
+    published: "2026-10-20T07:00:00+08:00"
+    summary: "地缘传导链测试样本，不是真实冲突报道。"
+    catalyst: policy
+  - id: n5
+    source: eastmoney_hot
+    source_kind: social
+    symbol: "600519"
+    name: 示例白酒个股
+    market: CN
+    headline: "人气榜热议示例白酒，传闻即将推出新品"
+    published: "2026-10-20T09:00:00+08:00"
+    catalyst: sentiment_hot
+  - id: n6
+    source: apewisdom
+    source_kind: social
+    symbol: "AAPL"
+    name: 示例美股
+    market: US
+    headline: "Reddit 热度：AAPL"
+    catalyst: sentiment_hot
+  - id: n7
+    source: fed
+    source_kind: official
+    headline: "Federal Reserve issues FOMC statement (fictional sample)"
+    url: "https://www.federalreserve.gov/example-fomc"
+    published: "2026-10-20T02:05:00+08:00"
+    summary: "虚构联储声明，仅供信源分级测试。"
+    catalyst: policy
+  - id: n8
+    source: reuters
+    source_kind: media
+    headline: "据知情人士：美联储官员讨论下一次会议路径（虚构独家）"
+    url: "https://example.invalid/reuters-exclusive"
+    published: "2026-10-20T07:40:00+08:00"
+    exclusive: true
+    attribution: people_familiar
+    catalyst: policy
+  - id: n9
+    source: ratings
+    source_kind: rating
+    symbol: "000333"
+    name: 示例家电个股
+    market: CN
+    headline: "示例券商上调示例家电目标价至虚构 80 元"
+    url: "https://example.invalid/broker-note"
+    published: "2026-10-20T08:40:00+08:00"
+    catalyst: rating_up
+  - id: n10
+    source: bloomberg
+    source_kind: media
+    headline: "Fed issues FOMC statement, markets watch dots (paywall headline only)"
+    url: "https://example.invalid/bbg-fed"
+    published: "2026-10-20T02:10:00+08:00"
+    paywall: true
+    catalyst: policy
+followups:
+  - headline_contains: "据知情人士：美联储"
+    status: pending
+reactions:
+  - symbol: "000333"
+    on: 2026-10-20
+    excess_return: 0.006
+    volume_ratio: 1.05
+    main_net: 12000000
+  - symbol: "AAPL"
+    on: 2026-10-20
+    excess_return: 0.012
+    volume_ratio: 1.3
+  - symbol: "600519"
+    on: 2026-10-20
+    excess_return: 0.002
+    volume_ratio: 0.9
+    missing: "缺数据：主力资金流"

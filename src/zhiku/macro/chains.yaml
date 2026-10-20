@@ -1,0 +1,46 @@
+# 可配置传导链。关键词命中新闻或地缘事件时自动标出受影响商品/行业。
+# 示例 ETF 代码仅为研究占位，不是推荐。
+chains:
+  - id: hormuz
+    name: 中东/霍尔木兹
+    keywords: [中东, 霍尔木兹, 伊朗, 以色列, 红海, 胡塞, 海峡封锁]
+    commodities: [原油, 航运, 炼化]
+    a_share: [石油石化, 航运, 炼化]
+    h_share: [能源, 航运]
+    us: [能源, 航空]
+    etfs: ["510300"]
+    risk_on_off: risk_off
+    hist_path_note: "同类冲击下原油常先跳升、黄金同步走强、航空与下游炼化分化。"
+
+  - id: ukraine
+    name: 俄乌
+    keywords: [俄乌, 乌克兰, 俄罗斯, 顿巴斯, 北溪]
+    commodities: [天然气, 小麦, 化肥]
+    a_share: [化肥, 农业, 煤炭]
+    h_share: [能源]
+    us: [农产品, 能源]
+    etfs: ["510300"]
+    risk_on_off: risk_off
+    hist_path_note: "历史样本中天然气与小麦脉冲上涨，避险资产同步受益。"
+
+  - id: trade_war
+    name: 贸易摩擦/关税/出口管制
+    keywords: [关税, 出口管制, 实体清单, 贸易摩擦, 稀土管制, 制裁]
+    commodities: [稀土, 半导体, 铜]
+    a_share: [稀土, 半导体, 铜]
+    h_share: [科技, 有色]
+    us: [半导体, 工业金属]
+    etfs: ["510300"]
+    risk_on_off: mixed
+    hist_path_note: "关税预期升温时相关上游资源脉冲，科技硬件估值承压。"
+
+  - id: risk_off
+    name: 避险情绪
+    keywords: [避险, 避险情绪, 地缘紧张, 战争升级, 突发袭击]
+    commodities: [黄金, 美债, 日元]
+    a_share: [黄金]
+    h_share: [黄金]
+    us: [美债, 黄金]
+    etfs: ["518880"]
+    risk_on_off: risk_off
+    hist_path_note: "风险偏好下降时黄金/美债/日元典型走强，权益高beta回落。"

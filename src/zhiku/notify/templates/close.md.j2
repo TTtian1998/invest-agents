@@ -5,6 +5,13 @@
 - 知识库：`{{ kb }}`
 - CN 收盘 15:00；HK 收盘 16:10（未到则标「未收盘」）；US 用最近一个已完成的美东交易日
 
+{% if event_windows %}
+## 事件窗口
+{% for w in event_windows %}
+- {{ w }}
+{% endfor %}
+{% endif %}
+
 {% if warnings %}
 ## 警告
 {% for w in warnings %}

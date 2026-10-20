@@ -1,0 +1,144 @@
+# 虚构宏观日历小样本。数字不是真实发布，也不是任何人的预测。
+events:
+  - id: US_CPI_2026-10-15
+    event_type: US_CPI
+    name: 美国CPI
+    region: US
+    importance: 5
+    scheduled_at: "2026-10-15T20:30:00+08:00"
+    previous: 0.2
+    consensus: 0.2
+    actual: 0.4
+    unit: "% m/m"
+    sigma: 0.10
+    reactions:
+      US2Y: {t0: 0.08, t1: 0.05, t5: 0.02}
+      US10Y: {t0: 0.06, t1: 0.04, t5: 0.01}
+      DXY: {t0: 0.004, t1: 0.003, t5: 0.001}
+      USDCNH: {t0: 0.002, t1: 0.001, t5: 0.0}
+      GOLD: {t0: -0.012, t1: -0.008, t5: -0.003}
+      WTI: {t0: -0.006, t1: -0.004, t5: 0.001}
+      BRENT: {t0: -0.005, t1: -0.003, t5: 0.0}
+      COPPER: {t0: -0.01, t1: -0.008, t5: -0.002}
+      NQ: {t0: -0.015, t1: -0.01, t5: -0.004}
+      ES: {t0: -0.01, t1: -0.007, t5: -0.002}
+      HSTECH: {t0: -0.018, t1: -0.012, t5: -0.006}
+      CSI300: {t0: -0.012, t1: -0.008, t5: -0.003}
+      VIX: {t0: 0.08, t1: 0.04, t5: 0.01}
+
+  - id: CN_PMI_2026-10-17
+    event_type: CN_PMI
+    name: 中国官方PMI
+    region: CN
+    importance: 4
+    scheduled_at: "2026-10-17T09:30:00+08:00"
+    previous: 49.8
+    consensus: 50.0
+    actual: 50.2
+    unit: "指数"
+    sigma: 0.40
+    reactions:
+      CSI300: {t0: 0.006, t1: 0.004, t5: 0.002}
+      HSTECH: {t0: 0.008, t1: 0.005, t5: 0.001}
+      COPPER: {t0: 0.004, t1: 0.003, t5: 0.001}
+      USDCNH: {t0: -0.001, t1: 0.0, t5: 0.0}
+
+  - id: US_RETAIL_2026-10-19
+    event_type: US_RETAIL
+    name: 美国零售销售
+    region: US
+    importance: 4
+    scheduled_at: "2026-10-19T20:30:00+08:00"
+    previous: 0.3
+    consensus: 0.4
+    actual: 0.1
+    unit: "% m/m"
+    sigma: 0.20
+    reactions:
+      US10Y: {t0: -0.04, t1: -0.03, t5: -0.01}
+      DXY: {t0: -0.003, t1: -0.002, t5: 0.0}
+      GOLD: {t0: 0.006, t1: 0.004, t5: 0.001}
+      NQ: {t0: 0.008, t1: 0.005, t5: 0.002}
+      CSI300: {t0: 0.004, t1: 0.002, t5: 0.0}
+      VIX: {t0: -0.03, t1: -0.02, t5: 0.0}
+
+  - id: EIA_2026-10-20
+    event_type: EIA
+    name: EIA原油库存
+    region: US
+    importance: 3
+    scheduled_at: "2026-10-20T22:30:00+08:00"
+    previous: 1.2
+    consensus: null
+    actual: null
+    unit: "百万桶"
+    sigma: 1.0
+    notes: ["一致预期未提供，不编造"]
+
+  - id: FOMC_2026-10-22
+    event_type: FOMC
+    name: FOMC利率决议
+    region: US
+    importance: 5
+    scheduled_at: "2026-10-22T02:00:00+08:00"
+    previous: 4.25
+    consensus: 4.25
+    actual: null
+    unit: "%"
+    sigma: 0.25
+    notes: ["点阵图与讲话随决议一并观察"]
+
+  - id: CN_LPR_2026-10-23
+    event_type: CN_LPR
+    name: LPR
+    region: CN
+    importance: 4
+    scheduled_at: "2026-10-23T09:15:00+08:00"
+    previous: 3.10
+    consensus: 3.10
+    actual: null
+    unit: "%"
+
+  - id: US_PCE_2026-10-24
+    event_type: US_PCE
+    name: 美国PCE
+    region: US
+    importance: 5
+    scheduled_at: "2026-10-24T20:30:00+08:00"
+    previous: 0.2
+    consensus: 0.2
+    actual: null
+    unit: "% m/m"
+    sigma: 0.08
+
+  - id: OPEC_2026-10-26
+    event_type: OPEC
+    name: OPEC+会议
+    region: OPEC
+    importance: 4
+    scheduled_at: "2026-10-26T19:00:00+08:00"
+
+  - id: CN_CPI_NOCONSENSUS
+    event_type: CN_CPI
+    name: 中国CPI（无预期样本）
+    region: CN
+    importance: 4
+    scheduled_at: "2026-10-14T09:30:00+08:00"
+    previous: 0.1
+    consensus: null
+    actual: 0.2
+    unit: "% y/y"
+    sigma: 0.15
+    reactions:
+      CSI300: {t0: 0.002, t1: 0.001, t5: 0.0}
+
+  - id: ECB_2026-10-21
+    event_type: ECB
+    name: 欧央行决议
+    region: EU
+    importance: 4
+    scheduled_at: "2026-10-21T20:15:00+08:00"
+    previous: 3.25
+    consensus: 3.25
+    actual: null
+    unit: "%"

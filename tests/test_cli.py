@@ -16,13 +16,14 @@ def _env(tmp_kb: Path, examples_dir: Path) -> dict[str, str]:
     return {
         "ZHIKU_KB": str(tmp_kb),
         "ZHIKU_FIXTURES": str(examples_dir / "fixtures"),
+        "ZHIKU_ANALYSIS_LLM": "0",
     }
 
 
 def test_help_lists_commands() -> None:
     result = RUNNER.invoke(app, ["--help"])
     assert result.exit_code == 0
-    for name in ("check", "close", "review", "exposure", "debate"):
+    for name in ("check", "close", "review", "exposure", "debate", "news", "macro", "daily", "screen"):
         assert name in result.output
 
 
@@ -76,6 +77,34 @@ def test_four_commands_write_markdown(tmp_kb: Path, examples_dir: Path) -> None:
     assert "候选教训" in weekly
 
     assert "禁加" in expo.output
+
+    news = RUNNER.invoke(
+        app,
+        ["--provider", "fixture", "news", "--date", "2026-10-20"],
+        env=env,
+    )
+    assert news.exit_code == 0, news.output
+    assert "意味着什么" in news.output or "so_what" in news.output
+    assert "一级" in news.output or "信源" in news.output
+    assert "未做深度分析" in news.output
+    assert "无" in news.output  # 空档打印「无」或分析正文含无
+
+    macro = RUNNER.invoke(
+        app,
+        ["--provider", "fixture", "macro", "--date", "2026-10-20"],
+        env=env,
+    )
+    assert macro.exit_code == 0, macro.output
+    assert "宏观锚点" in macro.output or "核心日历" in macro.output
+    assert "缺数据" in macro.output
+
+    daily = RUNNER.invoke(
+        app,
+        ["--provider", "fixture", "daily", "--date", "2026-10-20"],
+        env=env,
+    )
+    assert daily.exit_code == 0, daily.output
+    assert "宏观锚点" in daily.output
 
 
 def test_event_log_idempotent(tmp_kb: Path, examples_dir: Path) -> None:

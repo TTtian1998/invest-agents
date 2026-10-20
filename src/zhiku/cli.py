@@ -22,8 +22,9 @@ from zhiku.review.hitrate import review_week
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
-    help="投资智库 zhiku：触发线、14:55/收盘确认、成长仓闸门、周五命中率。不接券商、不下单。",
+    help="投资智库 zhiku：选股打分、回测、AI 审核、看板，以及触发线纪律。不接券商、不下单。",
 )
+factor_app = typer.Typer(add_completion=False, help="qlib 因子准备 / 训练 / 预测（可选 extra）。")
 
 
 def _die(msg: str, code: int = 1) -> None:
@@ -114,6 +115,19 @@ def _load_books(paths: Paths):
         _die(str(exc))
 
 
+def _apply_macro_windows(paths: Paths, on: date, provider_kind: str, evaluations) -> list[str]:
+    try:
+        from zhiku.macro.models import EventWindow
+        from zhiku.macro.runner import run_macro
+        from zhiku.macro.windows import apply_to_evaluations
+
+        bundle = run_macro(paths, on, provider_kind=provider_kind)
+        wins = [EventWindow.model_validate(w) for w in bundle.windows]
+        return apply_to_evaluations(evaluations, wins, on)
+    except Exception:  # noqa: BLE001 — 宏观失败不得阻断触发线
+        return []
+
+
 @app.command("check")
 def check_cmd(
     ctx: typer.Context,
@@ -131,6 +145,7 @@ def check_cmd(
     replay = ctx.obj["provider_kind"] == "fixture"
     evaluator = TriggerEvaluator(_provider(ctx), now=_clock(now_text), replay=replay)
     evaluations = evaluator.evaluate(books, on, EvalMode.CHECK_1455)
+    banners = _apply_macro_windows(paths, on, ctx.obj["provider_kind"], evaluations)
     events = evaluator.events_from(evaluations, on)
     written = EventLog(paths.events).append_many(events)
     md = render(
@@ -140,6 +155,7 @@ def check_cmd(
         kb=str(paths.kb),
         evaluations=evaluations,
         warnings=[],
+        event_windows=banners,
     )
     out = write_report(paths.reports, on, "check", md)
     typer.echo(md)
@@ -162,6 +178,7 @@ def close_cmd(
     replay = ctx.obj["provider_kind"] == "fixture" and now_text is None
     evaluator = TriggerEvaluator(_provider(ctx), now=clock, replay=replay)
     evaluations = evaluator.evaluate(books, on, EvalMode.CLOSE)
+    banners = _apply_macro_windows(paths, on, ctx.obj["provider_kind"], evaluations)
     events = evaluator.events_from(evaluations, on)
     written = EventLog(paths.events).append_many(events)
     md = render(
@@ -171,6 +188,7 @@ def close_cmd(
         kb=str(paths.kb),
         evaluations=evaluations,
         warnings=[],
+        event_windows=banners,
     )
     out = write_report(paths.reports, on, "close", md)
     typer.echo(md)
@@ -219,11 +237,26 @@ def review_cmd(
     end = _parse_date(end_text)
     events = EventLog(paths.events).read()
     result = review_week(events, _provider(ctx), end, rebound_pct=rebound_pct)
+    script_hits: list[dict] = []
+    source_hits: dict = {}
+    try:
+        from zhiku.macro.runner import run_macro
+        from zhiku.news.grades import load_followups, source_hitrate
+        from zhiku.news.runner import run_news
+
+        macro = run_macro(paths, end, provider_kind=ctx.obj["provider_kind"])
+        script_hits = macro.script_hits
+        news = run_news(paths, end, provider_kind=ctx.obj["provider_kind"], macro_bundle=macro)
+        source_hits = news.source_hits or source_hitrate(load_followups(paths.fixtures / "news.yaml"))
+    except Exception:  # noqa: BLE001
+        pass
     md = render(
         "weekly.md.j2",
         review=result,
         provider=ctx.obj["provider_kind"],
         kb=str(paths.kb),
+        script_hits=script_hits,
+        source_hits=source_hits,
     )
     out = write_report(paths.reports, result.end, "weekly", md)
     typer.echo(md)
@@ -231,6 +264,205 @@ def review_cmd(
     for lesson in result.lessons:
         typer.echo(f"- {lesson}", err=True)
     typer.echo(f"已写入 {out}", err=True)
+
+
+@app.command("screen")
+def screen_cmd(
+    ctx: typer.Context,
+    name: str = typer.Argument("all", help="greenblatt / piotroski / dividend / multifactor / all"),
+) -> None:
+    """运行经典选股公式，输出带分项的候选表。"""
+    from zhiku.pipeline.daily import _fundamentals_path
+    from zhiku.pipeline.settings import load_pipeline_settings
+    from zhiku.screens.fundamentals import load_fundamentals
+    from zhiku.screens.runner import SCREEN_FUNCS, run_screens
+
+    paths: Paths = ctx.obj["paths"]
+    settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
+    rows = load_fundamentals(_fundamentals_path(paths))
+    names = None if name == "all" else [name]
+    if names and names[0] not in SCREEN_FUNCS:
+        _die(f"未知公式 {name}，可选：{', '.join(SCREEN_FUNCS)} / all")
+    bundle = run_screens(rows, settings, names=names)
+    for q in bundle.quality:
+        if not q.passed:
+            typer.echo(f"[门槛] {q.symbol} 未通过：{'；'.join(q.reasons)}", err=True)
+    for sname, srows in bundle.screens.items():
+        typer.echo(f"## {sname}")
+        for row in srows:
+            typer.echo(f"{row.symbol}\t{row.name}\t{row.score:.1f}\t{row.breakdown}")
+
+
+@app.command("backtest")
+def backtest_cmd(
+    ctx: typer.Context,
+    screen: str = typer.Argument(..., help="公式名，或 trigger 回测触发线"),
+) -> None:
+    """对选股公式做月度等权回测；`trigger` 回测跌破价位线。"""
+    from zhiku.backtest.engine import backtest_screen, backtest_trigger_line, load_price_panel
+    from zhiku.pipeline.daily import _fundamentals_path
+    from zhiku.pipeline.settings import load_pipeline_settings
+    from zhiku.screens.fundamentals import load_fundamentals
+    from zhiku.screens.runner import SCREEN_FUNCS, run_screens
+
+    paths: Paths = ctx.obj["paths"]
+    price_file = paths.fixtures / "monthly_prices.csv"
+    if not price_file.is_file():
+        _die(f"找不到 {price_file}")
+    prices = load_price_panel(price_file)
+    settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
+    if screen == "trigger":
+        if "510300" not in prices.columns:
+            _die("触发线示例需要 510300 价格列")
+        result = backtest_trigger_line(prices["510300"], 3.80)
+    else:
+        if screen not in SCREEN_FUNCS:
+            _die(f"未知公式 {screen}")
+        rows = load_fundamentals(_fundamentals_path(paths))
+        bundle = run_screens(rows, settings, names=[screen])
+        picks = [r.symbol for r in bundle.screens.get(screen, [])[: settings.backtest.top_n]]
+        result = backtest_screen(prices, picks, settings.backtest, screen=screen)
+    typer.echo(
+        f"{result.screen} 年化={result.annualized} 回撤={result.max_drawdown} "
+        f"夏普={result.sharpe} 胜率={result.win_rate} 换手={result.turnover} "
+        f"闸门={'通过' if result.passed_gate else '未通过'} 引擎={result.engine}"
+    )
+    for note in result.notes:
+        typer.echo(note, err=True)
+
+
+@app.command("daily")
+def daily_cmd(
+    ctx: typer.Context,
+    date_text: Optional[str] = typer.Option(None, "--date", help="截面日 YYYY-MM-DD"),
+) -> None:
+    """一键：选股 → 打分 → 回测闸门 → AI 审核 → markdown/HTML/JSON。可配 cron。"""
+    from zhiku.pipeline.daily import run_daily, write_daily_reports
+
+    paths: Paths = ctx.obj["paths"]
+    paths.ensure_runtime_dirs()
+    on = _parse_date(date_text)
+    daily = run_daily(paths, on, provider_kind=ctx.obj["provider_kind"])
+    written = write_daily_reports(paths, on, daily)
+    md = next(p for p in written if p.suffix == ".md")
+    typer.echo(md.read_text(encoding="utf-8"))
+    for path in written:
+        typer.echo(f"已写入 {path}", err=True)
+
+
+@app.command("ui")
+def ui_cmd(
+    port: int = typer.Option(8501, "--port"),
+) -> None:
+    """启动本地 Streamlit 看板。"""
+    import subprocess
+    import sys
+    from pathlib import Path as P
+
+    try:
+        import streamlit  # noqa: F401
+    except ImportError:
+        _die('未安装看板 extra。请执行：uv pip install -e ".[ui]"')
+    app_path = P(__file__).resolve().parent / "app" / "streamlit_app.py"
+    cmd = [
+        sys.executable,
+        "-m",
+        "streamlit",
+        "run",
+        str(app_path),
+        "--server.port",
+        str(port),
+        "--server.headless",
+        "true",
+    ]
+    raise typer.Exit(subprocess.call(cmd))
+
+
+@factor_app.command("prepare")
+def factor_prepare(
+    ctx: typer.Context,
+    qlib_dir: Path = typer.Option(Path("./qlib_data"), "--qlib-dir"),
+) -> None:
+    """把本地 CSV 转为 qlib 格式（需 [qlib] extra）。"""
+    from zhiku.factors.qlib_adapter import QlibNotInstalled, prepare_from_csv
+
+    paths: Paths = ctx.obj["paths"]
+    try:
+        msg = prepare_from_csv(paths.fixtures, qlib_dir)
+    except QlibNotInstalled as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(0) from None
+    typer.echo(msg)
+
+
+@factor_app.command("train")
+def factor_train(
+    qlib_dir: Path = typer.Option(Path("./qlib_data"), "--qlib-dir"),
+    model: Path = typer.Option(Path("./kb/models/lgb_alpha158.pkl"), "--model"),
+) -> None:
+    """训练 Alpha158 + LightGBM 基线。"""
+    from zhiku.factors.qlib_adapter import QlibNotInstalled, train_alpha158
+
+    try:
+        msg = train_alpha158(qlib_dir, model)
+    except QlibNotInstalled as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from None
+    typer.echo(msg)
+
+
+@factor_app.command("predict")
+def factor_predict() -> None:
+    """输出 qlib 分数；未安装则空结果并提示降级。"""
+    from zhiku.factors.qlib_adapter import QLIB_HINT, predict_scores, qlib_available
+
+    scores = predict_scores(None, None)
+    if not qlib_available():
+        typer.echo(QLIB_HINT.strip(), err=True)
+        typer.echo("已降级：qlib 分数为空，流水线将只用公式分。")
+        raise typer.Exit(0)
+    typer.echo(scores or "{}")
+
+
+@app.command("news")
+def news_cmd(
+    ctx: typer.Context,
+    kind: str = typer.Option("all", "--kind", help="all / premarket-ah / premarket-us / midday"),
+    date_text: Optional[str] = typer.Option(None, "--date"),
+) -> None:
+    """新闻雷达：分析为主体，原文链接附后。无 LLM key 时规则模板降级。"""
+    from zhiku.news.runner import run_news, write_news_reports
+
+    paths: Paths = ctx.obj["paths"]
+    paths.ensure_runtime_dirs()
+    on = _parse_date(date_text)
+    bundle = run_news(paths, on, kind=kind.replace("-", "_"), provider_kind=ctx.obj["provider_kind"])
+    written = write_news_reports(paths, on, bundle)
+    md = next((p for p in written if p.suffix == ".md"), None)
+    if md is not None:
+        typer.echo(md.read_text(encoding="utf-8"))
+    for path in written:
+        typer.echo(f"已写入 {path}", err=True)
+
+
+@app.command("macro")
+def macro_cmd(
+    ctx: typer.Context,
+    date_text: Optional[str] = typer.Option(None, "--date"),
+) -> None:
+    """宏观事件锚点：日历、预期差、剧本、传导链、事件窗口。"""
+    from zhiku.macro.runner import run_macro, write_macro_reports
+
+    paths: Paths = ctx.obj["paths"]
+    paths.ensure_runtime_dirs()
+    on = _parse_date(date_text)
+    bundle = run_macro(paths, on, provider_kind=ctx.obj["provider_kind"])
+    written = write_macro_reports(paths, on, bundle)
+    md = next((p for p in written if p.suffix == ".md"), None)
+    if md is not None:
+        typer.echo(md.read_text(encoding="utf-8"))
+    for path in written:
+        typer.echo(f"已写入 {path}", err=True)
 
 
 @app.command("debate")
@@ -245,6 +477,9 @@ def debate_cmd(symbol: str) -> None:
         typer.echo(f"辩论层调用失败: {exc}", err=True)
         raise typer.Exit(1) from None
     typer.echo(message)
+
+
+app.add_typer(factor_app, name="factor")
 
 
 def run() -> None:

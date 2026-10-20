@@ -1,0 +1,17 @@
+# 虚构地缘样本。GPR 数值为测试用，不是 Iacoviello 原始序列。
+asof: "2026-10-20"
+gpr:
+  asof: "2026-10-20"
+  value: 128.0
+  history_percentile: 0.72
+active_chains: [hormuz]
+recent_events:
+  - on: "2026-10-18"
+    headline: "虚构：霍尔木兹海峡过境扰动（测试样本）"
+    chain_id: hormuz
+    source: fixture
+  - on: "2026-10-16"
+    headline: "虚构：市场避险情绪升温"
+    chain_id: risk_off
+    source: fixture
+gdelt: []

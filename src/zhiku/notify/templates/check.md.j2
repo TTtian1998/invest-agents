@@ -4,6 +4,13 @@
 - 数据源：`{{ provider }}`
 - 知识库：`{{ kb }}`
 
+{% if event_windows %}
+## 事件窗口
+{% for w in event_windows %}
+- {{ w }}
+{% endfor %}
+{% endif %}
+
 {% if warnings %}
 ## 警告
 {% for w in warnings %}

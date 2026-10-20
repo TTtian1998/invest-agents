@@ -1,0 +1,16 @@
+# 虚构锚定资产快照。价格与涨跌均为编造。
+asof: "2026-10-20"
+assets:
+  US2Y: {price: 3.85, chg: 0.04}
+  US10Y: {price: 4.12, chg: 0.03}
+  DXY: {price: 104.2, chg: 0.002}
+  USDCNH: {price: 7.18, chg: 0.001}
+  GOLD: {price: 2650.0, chg: -0.004}
+  WTI: {price: 78.5, chg: 0.006}
+  BRENT: {price: 82.1, chg: 0.005}
+  COPPER: {price: null, chg: null, missing: "缺数据"}
+  NQ: {price: 20150.0, chg: -0.008}
+  ES: {price: 5820.0, chg: -0.005}
+  HSTECH: {price: 4200.0, chg: -0.012}
+  CSI300: {price: 3850.0, chg: -0.006}
+  VIX: {price: 18.4, chg: 0.05}

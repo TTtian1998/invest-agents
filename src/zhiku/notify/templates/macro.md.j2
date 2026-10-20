@@ -1,0 +1,93 @@
+# 宏观锚点 {{ macro.asof }}
+
+时区：Asia/Shanghai。研究与提醒工具，不构成投资建议。缺字段写「缺数据」，不编造一致预期。
+
+{% if macro.notes %}
+## 运行备注
+{% for n in macro.notes %}
+- {{ n }}
+{% endfor %}
+{% endif %}
+
+## 事件分析
+{% if macro.analyses %}
+{% with cards = macro.analyses %}
+{% include "_analysis.md.j2" %}
+{% endwith %}
+{% else %}
+无
+{% endif %}
+低价值日历项未展开：{{ macro.low_value_count }} 条。
+
+## 未来 7 天核心日历
+{% for e in macro.calendar_7d %}
+- **{{ e.name }}** 重要度 {{ e.importance }}｜{{ e.scheduled_shanghai }}｜影响 {{ e.sessions | join("、") }}
+  - 前值 {{ e.previous if e.previous is not none else "缺数据" }} / 预期 {{ e.consensus if e.consensus is not none else "缺数据" }} / 实际 {{ e.actual if e.actual is not none else "尚未公布" }} {{ e.unit }}
+{% endfor %}
+{% if not macro.calendar_7d %}
+缺数据：未来 7 天无日历样本。
+{% endif %}
+
+## 已发布：预期差与市场反应
+{% for e in macro.released %}
+- **{{ e.name }}** {{ e.scheduled_shanghai }}
+  - 前值 {{ e.previous if e.previous is not none else "缺数据" }} / 预期 {{ e.consensus if e.consensus is not none else "缺数据" }} / 实际 {{ e.actual if e.actual is not none else "缺数据" }}
+  - 预期差 z：{{ e.surprise_z if e.surprise_z is not none else e.surprise_missing or "缺数据" }}；情景 {{ e.scenario or "缺数据" }}
+  {% for asset, mv in e.reactions.items() %}
+  - {{ asset }} T0={{ mv.t0 if mv.t0 is not none else "缺数据" }} / T+1={{ mv.t1 if mv.t1 is not none else "缺数据" }} / T+5={{ mv.t5 if mv.t5 is not none else "缺数据" }}
+  {% endfor %}
+{% endfor %}
+{% if not macro.released %}
+昨日无已发布样本。
+{% endif %}
+
+## 利率预期
+- 会议：{{ macro.rate_expectation.meeting or "缺数据" }}
+- 来源：{{ macro.rate_expectation.source }}
+- 隐含利率：{{ macro.rate_expectation.implied_rate if macro.rate_expectation.implied_rate is not none else "缺数据" }}
+- 加息 25bp：{{ macro.rate_expectation.hike_25_prob if macro.rate_expectation.hike_25_prob is not none else "缺数据" }}；降息 25bp：{{ macro.rate_expectation.cut_25_prob if macro.rate_expectation.cut_25_prob is not none else "缺数据" }}；不变：{{ macro.rate_expectation.hold_prob if macro.rate_expectation.hold_prob is not none else "缺数据" }}
+- {{ macro.rate_expectation.note }}
+
+## 锚定资产
+{% for a in macro.anchors %}
+- {{ a.label }}（{{ a.asset }}）：价格 {{ a.price if a.price is not none else "缺数据" }}；涨跌 {{ a.chg if a.chg is not none else "缺数据" }}{% if a.missing %}；{{ a.missing }}{% endif %}
+{% endfor %}
+
+## 地缘风险温度
+- 温度：**{{ macro.geo.temperature }}**；GPR {{ macro.geo.gpr if macro.geo.gpr is not none else "缺数据" }}（分位 {{ macro.geo.gpr_percentile if macro.geo.gpr_percentile is not none else "缺数据" }}）
+{% for e in macro.geo.recent_events %}
+- {{ e.on }} {{ e.headline }} → 链 {{ e.chain_id or "未匹配" }}
+{% endfor %}
+{% if macro.chains_fired %}
+已触发传导链：
+{% for c in macro.chains_fired %}
+- **{{ c.name }}**：商品 {{ c.commodities | join("、") }}；A {{ c.a_share | join("、") }}；H {{ c.h_share | join("、") }}；美 {{ c.us | join("、") }}。{{ c.hist_path_note }}
+{% endfor %}
+{% endif %}
+
+## 事件剧本（即将发生）
+{% for s in macro.scripts %}
+### {{ s.name }}
+{% for n in s.notes %}
+- {{ n }}
+{% endfor %}
+{% for p in s.playbooks %}
+- **{{ p.scenario }}**（样本 {{ p.n }}）
+  - 受益：{{ p.winners | join("、") or "缺数据" }}
+  - 受损：{{ p.losers | join("、") or "缺数据" }}
+  {% for h in p.holding_impact %}
+  - {{ h }}
+  {% endfor %}
+{% endfor %}
+{% endfor %}
+
+## 事件窗口
+{% for w in macro.active_windows %}
+- **{{ w.name }}** {{ w.start }}～{{ w.end }}：{{ w.hint }}{% if w.freeze_adds %}；窗口内禁加{% endif %}
+{% endfor %}
+{% if not macro.active_windows %}
+当日不在重大事件窗口内。
+{% endif %}
+
+---
+{{ disclaimer }}
