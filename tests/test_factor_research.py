@@ -133,6 +133,12 @@ def test_keep_decision_uses_valid_only() -> None:
     )
     assert decide_keep(base, worse_test_better_valid) is True
     assert decide_keep(base, better_test_worse_valid) is False
+    less_bad_but_negative = ExperimentResult(
+        name="z",
+        valid={"t20_xs": {"rank_icir": -0.05, "rank_ic": -0.01}},
+        test={"t20_xs": {"rank_icir": 0.9, "rank_ic": 0.4}},
+    )
+    assert decide_keep(base, less_bad_but_negative) is False
 
 
 def test_ch_features_flip_reversal_turnover_vol() -> None:

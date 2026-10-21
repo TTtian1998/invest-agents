@@ -410,7 +410,8 @@ def top30_backtest(
         return {}
     from zhiku.backtest.engine import load_price_panel_from_store
 
-    prices = load_price_panel_from_store(store, picks + ["510300", "000300", "000906"])
+    pool = sorted({str(s) for names in (membership or {}).values() for s in names})
+    prices = load_price_panel_from_store(store, pool + picks + ["510300", "000300", "000906"])
     if prices is None or prices.empty:
         return {"notes": ["缺价格，无法回测 Top30"]}
     if start is not None:
@@ -539,8 +540,10 @@ def decide_keep(baseline: ExperimentResult, cand: ExperimentResult) -> bool:
     c_ic = c.get("rank_ic") or 0.0
     if c_ir is None:
         return False
+    if float(c_ic) <= 0 or float(c_ir) <= 0:
+        return False
     if b_ir is None:
-        return (c_ic or 0) > 0
+        return True
     return float(c_ir) > float(b_ir) + 0.02 and float(c_ic) >= float(b_ic) - 0.002
 
 
@@ -692,6 +695,12 @@ def run_ablation(
                 encoding="utf-8",
             )
     base_res = by_name[BASELINE.name]
+    for cfg in CANDIDATES:
+        if cfg.name in by_name:
+            parent = by_name.get(cfg.versus or BASELINE.name, base_res)
+            by_name[cfg.name].kept = decide_keep(parent, by_name[cfg.name])
+    if out and rows:
+        _write_log(out, rows)
 
     kept_cfgs: list[ExperimentConfig] = []
     for cfg in CANDIDATES:
