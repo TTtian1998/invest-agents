@@ -231,6 +231,10 @@ def train_model(
 
 
 def _train_qlib(qlib_dir: Path, model_path: Path) -> str:
+    import os
+
+    os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
+    os.environ.setdefault("MLFLOW_DISABLE_AGENT_HINT", "1")
     import qlib
     from qlib.constant import REG_CN
     from qlib.contrib.data.handler import Alpha158
