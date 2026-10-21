@@ -128,8 +128,11 @@
 ## AI 审核
 {% for a in daily.audits %}
 ### {{ a.symbol }} {{ a.name }} — {{ a.conclusion }}
-{% if a.skipped %}
+{% if a.skip_reason %}
 - {{ a.skip_reason }}
+{% endif %}
+{% if a.disagreements %}
+- **大师分歧：** {% for d in a.disagreements %}{{ d.summary }}{% if not loop.last %}；{% endif %}{% endfor %}
 {% endif %}
 {% for o in a.opinions %}
 - {{ o.master }}：{{ o.stance }} — {{ o.rationale }}

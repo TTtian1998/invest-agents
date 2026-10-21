@@ -71,6 +71,18 @@ class MultifactorSettings(BaseModel):
     require_quality: bool = True
 
 
+class ClassicScreenSettings(BaseModel):
+    top_n: int = 30
+    min_score: float = 0.0
+    require_quality: bool = False
+
+
+class SizingSettings(BaseModel):
+    enabled: bool = False
+    name_cap: float = 0.10
+    stop_pct: float = 0.08
+
+
 class MergeSettings(BaseModel):
     formula: float = 0.6
     qlib: float = 0.4
@@ -95,7 +107,18 @@ class BacktestSettings(BaseModel):
 
 class AISettings(BaseModel):
     top_n: int = 15
-    masters: list[str] = Field(default_factory=lambda: ["buffett", "munger", "graham", "lynch"])
+    masters: list[str] = Field(
+        default_factory=lambda: [
+            "buffett",
+            "munger",
+            "graham",
+            "lynch",
+            "fisher",
+            "livermore",
+            "oneil",
+            "marks",
+        ]
+    )
 
 
 class NewsScoreWeights(BaseModel):
@@ -347,6 +370,12 @@ class PipelineSettings(BaseModel):
     piotroski: PiotroskiSettings = Field(default_factory=PiotroskiSettings)
     dividend: DividendSettings = Field(default_factory=DividendSettings)
     multifactor: MultifactorSettings = Field(default_factory=MultifactorSettings)
+    graham: ClassicScreenSettings = Field(default_factory=ClassicScreenSettings)
+    lynch_peg: ClassicScreenSettings = Field(default_factory=ClassicScreenSettings)
+    canslim: ClassicScreenSettings = Field(default_factory=ClassicScreenSettings)
+    livermore: ClassicScreenSettings = Field(default_factory=ClassicScreenSettings)
+    fisher: ClassicScreenSettings = Field(default_factory=ClassicScreenSettings)
+    sizing: SizingSettings = Field(default_factory=SizingSettings)
     merge: MergeSettings = Field(default_factory=MergeSettings)
     backtest: BacktestSettings = Field(default_factory=BacktestSettings)
     ai: AISettings = Field(default_factory=AISettings)

@@ -39,6 +39,11 @@ stocks:
     asset_turnover_prev: 0.84
     momentum_12_1: 0.18
     volatility: 0.21
+    eps_growth: 0.18
+    ncav: 40000000000
+    rd_to_sales: 0.04
+    dist_to_high: -0.08
+    listed_years: 12
 
   - symbol: "600519"
     market: CN
@@ -79,6 +84,11 @@ stocks:
     asset_turnover_prev: 0.52
     momentum_12_1: 0.08
     volatility: 0.19
+    eps_growth: 0.08
+    ncav: 80000000000
+    rd_to_sales: 0.01
+    dist_to_high: -0.02
+    listed_years: 20
 
   - symbol: "000858"
     market: CN

@@ -55,6 +55,11 @@ class Fundamentals(BaseModel):
     asset_turnover_prev: float | None = None
     momentum_12_1: float | None = None
     volatility: float | None = None
+    ncav: float | None = None
+    eps_growth: float | None = None
+    rd_to_sales: float | None = None
+    dist_to_high: float | None = None
+    listed_years: float | None = None
 
     @property
     def roe_3y_mean(self) -> float | None:

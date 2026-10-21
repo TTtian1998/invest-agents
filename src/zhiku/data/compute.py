@@ -54,6 +54,7 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "receivables": ("应收账款", "Net Receivables", "ACCOUNTS_RECE"),
     "eps": ("每股收益", "EPS", "basicEPS"),
     "bps": ("每股净资产", "Book Value Per Share", "BVPS"),
+    "rd": ("研发费用", "研发支出", "Research And Development", "R&D"),
     "roe_pct": ("净资产收益率", "ROE"),
     "debt_asset_pct": ("资产负债率",),
 }
@@ -116,6 +117,28 @@ def nwc_of(balance: dict[str, Any] | None) -> float | None:
 
 def nfa_of(balance: dict[str, Any] | None) -> float | None:
     return pick_num(balance, "fixed_assets")
+
+
+def ncav_of(balance: dict[str, Any] | None) -> float | None:
+    """格雷厄姆 NCAV：流动资产 − 全部负债。缺一项则 None。"""
+    ca = pick_num(balance, "current_assets")
+    tl = pick_num(balance, "total_liab")
+    if ca is None or tl is None:
+        return None
+    return ca - tl
+
+
+def dist_to_high(closes: pd.Series | None, window: int = 252) -> float | None:
+    if closes is None or getattr(closes, "empty", True):
+        return None
+    s = closes.dropna().astype(float)
+    if len(s) < 20:
+        return None
+    peak = float(s.iloc[-window:].max()) if len(s) >= 2 else None
+    last = float(s.iloc[-1])
+    if peak is None or peak <= 0:
+        return None
+    return last / peak - 1.0
 
 
 def interest_bearing(balance: dict[str, Any] | None) -> float | None:
@@ -357,6 +380,12 @@ def snapshot_from_store(
     ebit = ebit_of(income)
     nwc = nwc_of(balance)
     nfa = nfa_of(balance)
+    ncav = ncav_of(balance)
+    prev_ni = pick_num(prev_income, "net_income")
+    eps_g = ratio(ni - prev_ni, abs(prev_ni)) if ni is not None and prev_ni not in (None, 0) else None
+    rev = pick_num(income, "revenue")
+    rd = pick_num(income, "rd")
+    rd_sales = ratio(rd, rev)
     eps = pick_num(income, "eps")
     bps = pick_num(income, "bps")
     if mktcap is None and equity is not None and bps is not None and bps != 0 and last_close is not None:
@@ -409,6 +438,10 @@ def snapshot_from_store(
         asset_turnover_prev=ato_prev,
         momentum_12_1=mom,
         volatility=vol,
+        ncav=ncav,
+        eps_growth=eps_g,
+        rd_to_sales=rd_sales,
+        dist_to_high=dist_to_high(closes),
     )
 
 

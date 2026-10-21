@@ -318,7 +318,7 @@ def review_cmd(
 @app.command("screen")
 def screen_cmd(
     ctx: typer.Context,
-    name: str = typer.Argument("all", help="greenblatt / piotroski / dividend / multifactor / all"),
+    name: str = typer.Argument("all", help="greenblatt / piotroski / dividend / multifactor / graham / lynch_peg / canslim / livermore / fisher / all"),
 ) -> None:
     """运行经典选股公式，输出带分项的候选表。"""
     from zhiku.pipeline.settings import load_pipeline_settings

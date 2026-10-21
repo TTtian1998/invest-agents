@@ -49,6 +49,36 @@ multifactor:
   top_n: 30
   require_quality: true
 
+graham:
+  top_n: 30
+  min_score: 0
+  require_quality: false
+
+lynch_peg:
+  top_n: 30
+  min_score: 0
+  require_quality: false
+
+canslim:
+  top_n: 30
+  min_score: 0
+  require_quality: false
+
+livermore:
+  top_n: 30
+  min_score: 0
+  require_quality: false
+
+fisher:
+  top_n: 30
+  min_score: 0
+  require_quality: false
+
+sizing:
+  enabled: false
+  name_cap: 0.10
+  stop_pct: 0.08
+
 merge:
   formula: 0.6
   qlib: 0.4
@@ -71,7 +101,7 @@ backtest:
 
 ai:
   top_n: 15
-  masters: [buffett, munger, graham, lynch]
+  masters: [buffett, munger, graham, lynch, fisher, livermore, oneil, marks]
 
 news:
   enabled: true
