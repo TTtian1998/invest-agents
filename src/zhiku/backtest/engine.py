@@ -121,6 +121,10 @@ def compute_benchmarks(prices: pd.DataFrame, settings: BacktestSettings) -> dict
             series = prices[sym].dropna()
             if len(series) < 2:
                 continue
+            last_px = float(series.iloc[-1])
+            # 000300/000906 指数点位通常为千级；个位数多半是错把深市股票当指数
+            if sym in {"000300", "000906"} and last_px < 100:
+                continue
             nav = series / float(series.iloc[0])
             out[name] = _nav_metrics(nav, screen=name, settings=settings)
             out[name].notes = [f"指数对照用 {sym}"]
