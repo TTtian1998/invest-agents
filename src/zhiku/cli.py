@@ -598,6 +598,29 @@ def factor_train(
     typer.echo(msg)
 
 
+@factor_app.command("research")
+def factor_research(
+    ctx: typer.Context,
+    out_dir: Optional[Path] = typer.Option(None, "--out", help="实验日志目录，默认 artifacts"),
+    asof_text: Optional[str] = typer.Option(None, "--asof"),
+) -> None:
+    """单变量消融：验证集决定去留，测试集只看一次。产出不进 git。"""
+    from zhiku.data.store import MarketStore
+    from zhiku.factors.experiment import run_ablation
+
+    paths: Paths = ctx.obj["paths"]
+    store = MarketStore(paths.data_dir)
+    dest = out_dir or Path("/opt/cursor/artifacts/zhiku-quant-research")
+    asof = _parse_date(asof_text)
+    payload = run_ablation(store, asof=asof, out_dir=dest, models_dir=paths.models_dir)
+    kept = payload["payload"].get("kept") or []
+    typer.echo(
+        f"完成 {payload['payload'].get('n_experiments')} 个实验；"
+        f"测试集查看次数={payload['payload'].get('test_looks')}；"
+        f"保留={kept}；锁={payload['payload'].get('locked')}；日志={dest}"
+    )
+
+
 @factor_app.command("predict")
 def factor_predict(ctx: typer.Context) -> None:
     """输出 qlib 分数；未训练则空结果并提示。"""

@@ -73,8 +73,8 @@ def run_daily(
     qlib_meta = model_status(paths.models_dir)
     if qlib_meta.get("status") == "未训练":
         notes.append("qlib 因子：未训练。总分仅使用公式分。")
-    elif not qlib_available() and qlib_meta.get("kind") != "lgb_lite":
-        notes.append("未安装 [qlib]，若本地已有 LightGBM 模型仍会出分。")
+    elif not qlib_available() and qlib_meta.get("kind") not in {"lgb_lite", "lgb_panel", "zscore_panel"}:
+        notes.append("未安装 [qlib]，若本地已有 LightGBM / 面板模型仍会出分。")
     store = None
     if provider_kind == "live":
         from zhiku.data.store import MarketStore

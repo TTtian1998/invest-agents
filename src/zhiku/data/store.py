@@ -524,6 +524,46 @@ class MarketStore:
         down = df.pivot(index="date", columns="symbol", values="limit_down").fillna(0).astype(bool)
         return up.sort_index(), down.sort_index()
 
+    def statements_frame(self, symbols: list[str] | None = None) -> pd.DataFrame:
+        q = "SELECT symbol, kind, period, announced, payload FROM statements"
+        params: list[Any] = []
+        if symbols:
+            marks = ",".join("?" * len(symbols))
+            q += f" WHERE symbol IN ({marks})"
+            params.extend(symbols)
+        with _connect(self.sqlite_path) as conn:
+            df = pd.read_sql_query(q, conn, params=params)
+        if df.empty:
+            return df
+        df["announced"] = pd.to_datetime(df["announced"], errors="coerce")
+        return df
+
+    def dividends_frame(self, symbols: list[str] | None = None) -> pd.DataFrame:
+        q = "SELECT symbol, ex_date, announced, amount, yield FROM dividends"
+        params: list[Any] = []
+        if symbols:
+            marks = ",".join("?" * len(symbols))
+            q += f" WHERE symbol IN ({marks})"
+            params.extend(symbols)
+        with _connect(self.sqlite_path) as conn:
+            df = pd.read_sql_query(q, conn, params=params)
+        if df.empty:
+            return df
+        df["ex_date"] = pd.to_datetime(df["ex_date"], errors="coerce")
+        df["announced"] = pd.to_datetime(df["announced"], errors="coerce")
+        return df
+
+    def listing_industry(self, symbols: list[str] | None = None) -> dict[str, str]:
+        q = "SELECT symbol, industry FROM listings"
+        params: list[Any] = []
+        if symbols:
+            marks = ",".join("?" * len(symbols))
+            q += f" WHERE symbol IN ({marks})"
+            params.extend(symbols)
+        with _connect(self.sqlite_path) as conn:
+            rows = conn.execute(q, params).fetchall()
+        return {str(s): str(ind) for s, ind in rows if ind}
+
     def statements_asof(self, symbol: str, asof: date) -> dict[str, dict[str, Any]]:
         """每个 kind 取 announced<=asof 的最新一条。period 日不得替代公告日。"""
         with _connect(self.sqlite_path) as conn:

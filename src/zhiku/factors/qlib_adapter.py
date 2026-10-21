@@ -142,6 +142,16 @@ def latest_model(models_dir: Path) -> tuple[Path | None, dict[str, Any] | None]:
     models_dir = Path(models_dir)
     if not models_dir.is_dir():
         return None, None
+    panel_pkl = models_dir / "lgb_panel.pkl"
+    panel_meta = models_dir / "lgb_panel.meta.json"
+    recipe = models_dir / "locked_recipe.json"
+    if recipe.is_file() and panel_pkl.is_file():
+        meta = {}
+        if panel_meta.is_file():
+            meta = json.loads(panel_meta.read_text(encoding="utf-8"))
+        meta.setdefault("path", str(panel_pkl))
+        meta.setdefault("status", "trained")
+        return panel_pkl, meta
     selected_pkl = models_dir / "selected.pkl"
     selected_meta = models_dir / "selected.meta.json"
     if selected_pkl.is_file():
@@ -464,6 +474,71 @@ def _train_lgb_lite(
     }
 
 
+def train_panel_recipe(
+    store: MarketStore,
+    models_dir: Path,
+    *,
+    asof: date | None = None,
+) -> dict[str, Any]:
+    """用验证集锁过的配方训练面板模型；测试集指标只记录不回写调参。"""
+    from zhiku.factors.experiment import ExperimentConfig, run_one
+
+    asof = asof or now_shanghai().date()
+    recipe_path = Path(models_dir) / "locked_recipe.json"
+    if not recipe_path.is_file():
+        return {
+            "status": "skipped",
+            "notes": ["无 locked_recipe.json：验证集消融未锁配方，不把未验证组合写入生产"],
+        }
+    try:
+        raw = json.loads(recipe_path.read_text(encoding="utf-8"))
+        cfg = ExperimentConfig(
+            **{
+                k: tuple(raw[k]) if k == "features" and isinstance(raw[k], list) else raw[k]
+                for k in ExperimentConfig.__dataclass_fields__
+                if k in raw
+            }
+        )
+    except (OSError, TypeError, json.JSONDecodeError, KeyError) as exc:
+        return {"status": "skipped", "notes": [f"locked_recipe.json 无法读取：{exc}"]}
+    res, pred, model = run_one(store, cfg, asof=asof, report_splits=("valid",))
+    path = Path(models_dir) / "lgb_panel.pkl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    feat_names = []
+    kind = "lgb_panel"
+    if cfg.model == "zscore" or (isinstance(model, dict) and model.get("kind") == "zscore"):
+        kind = "zscore_panel"
+        feat_names = list((model or {}).get("features") or [])
+        model = None
+    elif model is not None and hasattr(model, "feature_name"):
+        feat_names = list(model.feature_name())
+    with path.open("wb") as fh:
+        pickle.dump({"kind": kind, "model": model, "features": feat_names, "config": cfg.__dict__}, fh)
+    meta = {
+        "kind": kind,
+        "trained_on": now_shanghai().date().isoformat(),
+        "ic": ((res.valid.get("t20_xs") or {}) or {}).get("rank_ic"),
+        "rank_ic": (res.valid.get("t20_xs") or res.valid.get("own_label") or {}).get("rank_ic"),
+        "rank_icir": (res.valid.get("t20_xs") or res.valid.get("own_label") or {}).get("rank_icir"),
+        "icir": (res.valid.get("t20_xs") or res.valid.get("own_label") or {}).get("rank_icir"),
+        "quintiles": (res.valid.get("t20_xs") or res.valid.get("own_label") or {}).get("quintiles") or {},
+        "label": cfg.label,
+        "valid": res.valid,
+        "test": res.test,
+        "top30": res.top30,
+        "n_train": res.n_train,
+        "n_valid": res.n_valid,
+        "n_test": res.n_test,
+        "notes": res.notes,
+        "path": str(path),
+        "status": "trained",
+        "features": feat_names,
+        "config": cfg.__dict__,
+    }
+    _write_meta(path, meta)
+    return meta
+
+
 def train_and_select(
     *,
     qlib_dir: Path,
@@ -563,12 +638,40 @@ def predict_scores(
     feats = asof_feature_row(bars, asof)
     if feats.empty:
         return {}
-    if isinstance(payload, dict) and payload.get("kind") == "lgb_lite":
-        model = payload["model"]
-        cols = payload.get("features") or FEATURE_NAMES
+    if isinstance(payload, dict) and payload.get("kind") in {"lgb_lite", "lgb_panel", "zscore_panel"}:
+        cfg = payload.get("config") or {}
+        feat_keys = tuple(cfg.get("features") or ("px",))
+        if payload.get("kind") in {"lgb_panel", "zscore_panel"}:
+            from zhiku.factors.dataset import asof_score_frame
+
+            feats = asof_score_frame(store, list(feats.index if symbols is None else symbols), asof, feat_keys)
+            if feats.empty:
+                return {}
+            if cfg.get("neutralize"):
+                from zhiku.factors.dataset import attach_industry_size, neutralize
+
+                idx = pd.MultiIndex.from_arrays(
+                    [[pd.Timestamp(asof)] * len(feats), feats.index.astype(str)],
+                    names=["date", "symbol"],
+                )
+                tmp = feats.copy()
+                tmp.index = idx
+                industry, size = attach_industry_size(tmp.index, store, tmp if "f_log_size" in tmp.columns else None)
+                for col in tmp.columns:
+                    tmp[col] = neutralize(tmp[col], industry=industry, size=size)
+                feats = tmp.droplevel("date")
+        model = payload.get("model")
+        cols = payload.get("features") or list(feats.columns)
         X = feats.reindex(columns=cols)
-        pred = model.predict(X)
-        series = pd.Series(pred, index=feats.index)
+        if payload.get("kind") == "zscore_panel" or cfg.get("model") == "zscore":
+            z = X.astype(float)
+            pred = ((z - z.mean()) / z.std(ddof=0).replace(0, np.nan)).mean(axis=1)
+            series = pred
+        else:
+            if model is None:
+                return {}
+            pred = model.predict(X)
+            series = pd.Series(pred, index=feats.index)
     else:
         lite = None
         if models_dir is not None:
