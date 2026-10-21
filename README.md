@@ -126,10 +126,10 @@ zk --provider live daily --date 2026-10-21
 | 首次 `zk data sync --universe csi800 --years 3 --workers 4 --skip-global` | 约 40–70 分钟 | 成分 800，qfq ≈798/801 |
 | 新浪明细财务（CSI800） | 约 25 分钟 | ebit 覆盖约 710/800，流动资产约 634/800 |
 | `zk data sync --incremental`（已同步池） | **1.5s** | 截面只写不复权；前复权按涨跌平移，禁止把原始价写入 qfq |
-| `zk factor train` | ~40s | 按 RankICIR→RankIC 均值选默认；报告两模型五分位。旧口径曾误选 lgb_lite（ICIR 0.004） |
-| `zk --provider live daily --date 2026-10-21` | 正确性校验后重跑 | 见 `/opt/cursor/artifacts/zhiku-live-2026-10-21/`（不进 git）；旧摘要数字因 qfq 混入不可信 |
+| `zk factor train` | ~40s | 默认 **Alpha158** RankIC 0.026 RankICIR 0.177；lgb_lite RankIC 0.002 RankICIR 0.015 |
+| `zk --provider live daily --date 2026-10-21` | ~120s | 四公式年化 +12.8%/+21.4%/+14.3%/+20.6%，回撤 -16%/-14%/-16%/-27%；沪深300 +7.3%/-16%；全池等权 +17.6%/-12%。摘要 `/opt/cursor/artifacts/zhiku-live-2026-10-21-corrected/`（不进 git） |
 
-A 股全市场（`--universe all --resume`）本机未跑完：约 17%（~3000/17442）时预计全量再 2.5–3 小时。每日增量对已入库标的应在 10 分钟内（实测 CSI800 1.5s）。东财 hist 会熔断改 baostock。
+A 股全市场（`--universe all --resume`）仍在跑：约 39%（6555/16642 qfq）。每日增量对已入库标的应在 10 分钟内。东财 hist 会熔断改 baostock。旧摘要（复权混入）不可信，对照表见同目录 `COMPARISON.md`。
 
 分红旧实现把「每10股派息」当成现金总额/市值，中证800会空篮；已修正。配置见 `config/data_sync.example.yaml` 与 `pipeline.yaml` 的 `dividend.*`。
 

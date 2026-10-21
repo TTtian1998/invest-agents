@@ -17,7 +17,7 @@
 - 已公布 {{ e.name }} 预期 {{ e.consensus if e.consensus is not none else "缺数据" }} / 今值 {{ e.actual if e.actual is not none else "缺数据" }} z={{ e.surprise_z if e.surprise_z is not none else "缺数据" }}
 {% endfor %}
 核心日历（未来7天）：
-{% for e in (m.calendar_7d or []) if e.event_type in ["US_NFP","US_CPI","US_CORE_CPI","US_PCE","FOMC","CN_CPI","CN_PPI","CN_GDP","CN_SF","CN_LPR","ECB","BOJ"] %}
+{% for e in (m.calendar_7d or []) if e.event_type in ["US_NFP","US_CPI","US_CORE_CPI","US_PCE","FOMC","CN_CPI","CN_PPI","CN_GDP","CN_SF","CN_LPR","ECB","BOJ"] and (e.importance or 0) >= 4 and ("讲话" not in (e.name or "")) %}
 - {{ e.event_type }} {{ e.name }} {{ e.scheduled_shanghai }} 重要度{{ e.importance }}
 {% endfor %}
 
