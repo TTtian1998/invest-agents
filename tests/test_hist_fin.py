@@ -47,15 +47,16 @@ def test_map_baostock_forecast_and_dividend() -> None:
     fc = map_baostock_forecast(
         "000333",
         {
-            "statDate": "2024-12-31",
-            "pubDate": "2025-01-15",
-            "profitForcastExp": "20",
-            "profitForcastLastYear": "10",
+            "profitForcastExpStatDate": "2024-12-31",
+            "profitForcastExpPubDate": "2025-01-15",
+            "profitForcastChgPctUp": "20",
+            "profitForcastChgPctDwn": "10",
+            "profitForcastType": "预增",
         },
     )
     assert fc is not None
     assert fc["kind"] == "forecast"
-    assert fc["payload"]["profit_forecast"] == 20.0
+    assert abs(fc["payload"]["increment"] - 0.15) < 1e-9
     div = map_baostock_dividend(
         "000333",
         {

@@ -71,9 +71,15 @@ def fetch(bs_code: str, start_year: int, end_year: int) -> dict:
                         for row in rows:
                             row["_kind"] = kind
                             statements.append(row)
-                    for row in _query(bs, "query_forecast_report", code=bs_code, year=year, quarter=quarter):
-                        forecasts.append(row)
                 dividends.extend(_query(bs, "query_dividend_data", code=bs_code, year=str(year), yearType="report"))
+            for row in _query(
+                bs,
+                "query_forecast_report",
+                code=bs_code,
+                start_date=f"{start_year}-01-01",
+                end_date=f"{end_year}-12-31",
+            ):
+                forecasts.append(row)
             return {"statements": statements, "forecasts": forecasts, "dividends": dividends}
         finally:
             try:

@@ -215,22 +215,39 @@ def map_baostock_statement(symbol: str, kind: str, row: dict[str, Any]) -> dict[
 
 
 def map_baostock_forecast(symbol: str, row: dict[str, Any]) -> dict[str, Any] | None:
-    """业绩预告。profitForcastExp 相对上年；公告日用 pubDate。"""
-    period = _as_date(_cell_dict(row, "statDate", "stat_date"))
-    announced = _as_date(_cell_dict(row, "pubDate", "pub_date"))
+    """业绩预告。公告日用 profitForcastExpPubDate；修正幅度取上下限中点。"""
+    period = _as_date(
+        _cell_dict(row, "profitForcastExpStatDate", "statDate", "stat_date")
+    )
+    announced = _as_date(
+        _cell_dict(row, "profitForcastExpPubDate", "pubDate", "pub_date")
+    )
     announced_is_period = False
     if announced is None and period is not None:
         announced = period
         announced_is_period = True
     if announced is None:
         return None
+    up = _num(_cell_dict(row, "profitForcastChgPctUp", "incrementExp", "increment"))
+    down = _num(_cell_dict(row, "profitForcastChgPctDwn"))
+    increment = None
+    if up is not None and down is not None:
+        increment = (up + down) / 2.0
+    elif up is not None:
+        increment = up
+    elif down is not None:
+        increment = down
+    if increment is not None and abs(increment) > 2:
+        increment = increment / 100.0
     payload = {
         "profit_forecast": _num(_cell_dict(row, "profitForcastExp", "profitForecastExp", "profitForcast")),
         "profit_last": _num(_cell_dict(row, "profitForcastLastYear", "profitForecastLastYear")),
-        "increment": _num(_cell_dict(row, "incrementExp", "increment")),
+        "increment": increment,
         "increment_last": _num(_cell_dict(row, "incrementLastYear")),
-        "forecast_type": _cell_dict(row, "type"),
-        "forecast_range": _cell_dict(row, "range"),
+        "forecast_type": _cell_dict(row, "profitForcastType", "type"),
+        "forecast_range": _cell_dict(row, "profitForcastAbstract", "range"),
+        "chg_pct_up": up,
+        "chg_pct_down": down,
     }
     if all(payload.get(k) is None for k in ("profit_forecast", "profit_last", "increment")):
         return None
