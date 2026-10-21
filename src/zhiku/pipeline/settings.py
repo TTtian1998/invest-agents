@@ -103,6 +103,9 @@ class BacktestSettings(BaseModel):
     benchmark_symbols: list[str] = Field(default_factory=lambda: ["510300", "000300", "000906"])
     sanity_max_ann_gap: float = 0.25
     pit_universe: str = "auto"
+    require_half_excess: bool = True
+    fill: str = "next_open"
+    n_trials: int = 9
 
 
 class AISettings(BaseModel):

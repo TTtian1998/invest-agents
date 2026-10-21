@@ -8,7 +8,13 @@ import pandas as pd
 
 from datetime import date
 
-from zhiku.backtest.metrics import BacktestResult, monthly_equal_weight, summarize_nav
+from zhiku.backtest.metrics import (
+    BacktestResult,
+    monthly_equal_weight,
+    split_half_excess,
+    summarize_nav,
+    year_excesses,
+)
 from zhiku.pipeline.settings import BacktestSettings
 
 
@@ -182,6 +188,13 @@ def attach_benchmarks(
         result.benchmark_annualized = primary.annualized
         result.excess_annualized = result.annualized - primary.annualized
         result.beat_benchmark = result.excess_annualized > 0
+        nav = _equity_to_series(result)
+        bench_nav = _equity_to_series(primary)
+        if not nav.empty and not bench_nav.empty:
+            if result.excess_first_half is None:
+                result.excess_first_half, result.excess_second_half = split_half_excess(nav, bench_nav)
+            if not result.year_excess:
+                result.year_excess = year_excesses(nav, bench_nav)
     ew = benches.get("universe_ew")
     idx = benches.get("csi300") or benches.get("csi800")
     if ew is not None and idx is not None and ew.annualized is not None and idx.annualized is not None:
@@ -314,6 +327,12 @@ def backtest_screen(
     return result
 
 
+def _equity_to_series(result: BacktestResult) -> pd.Series:
+    if not result.equity:
+        return pd.Series(dtype=float)
+    return pd.Series({pd.Timestamp(d): float(v) for d, v in result.equity})
+
+
 def _gate(result: BacktestResult, settings: BacktestSettings) -> bool:
     if result.sharpe is not None and result.sharpe < settings.min_sharpe:
         return False
@@ -327,10 +346,26 @@ def _gate(result: BacktestResult, settings: BacktestSettings) -> bool:
             ew_sharpe = ew.get("sharpe")
             if ew_sharpe is not None and (result.sharpe is None or result.sharpe < float(ew_sharpe)):
                 return False
+    if getattr(settings, "require_half_excess", False):
+        # 没算出来的短样本不挡；算出来则两段都须 > 0
+        if result.excess_first_half is not None and result.excess_first_half <= 0:
+            return False
+        if result.excess_second_half is not None and result.excess_second_half <= 0:
+            return False
     return True
 
 
 def finalize_gate(result: BacktestResult, settings: BacktestSettings) -> BacktestResult:
+    if result.deflated_sharpe is None and result.sharpe is not None:
+        from zhiku.backtest.pit_gate import deflated_sharpe_stats
+
+        n_obs = max(len(result.equity) - 1, 0)
+        n_trials = int(getattr(settings, "n_trials", 9) or 9)
+        if n_obs >= 4:
+            stats = deflated_sharpe_stats(result.sharpe, n_obs, n_trials)
+            result.deflated_sharpe = stats["deflated_sharpe"]
+            result.dsr_prob = stats["dsr_prob"]
+            result.n_trials = n_trials
     result.passed_gate = _gate(result, settings)
     return result
 

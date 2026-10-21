@@ -96,6 +96,9 @@ backtest:
   min_sharpe: 0.0            # 示例数据较短，默认不因夏普挡掉公式
   require_beat_benchmark: true
   require_sharpe_ge_benchmark: true
+  require_half_excess: true   # 前后半段对同池超额都须 > 0
+  fill: next_open             # 调仓日 T 用 T 前数据，T+1 开盘成交
+  n_trials: 9                 # 已测公式数，用于 deflated Sharpe
   pit_universe: auto
   top_n: 3
 

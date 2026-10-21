@@ -188,28 +188,62 @@ def run_daily(
                 notes.append(probe.sanity_note)
             if probe.sanity_ok is False:
                 notes.append("同池等权与指数年化差超过阈值，请对照时点池口径，勿与静态今日成分混读。")
+        pit_results = None
+        if provider_kind == "live" and store is not None and membership is not None:
+            try:
+                from zhiku.backtest.pit_gate import evaluate_screens, load_statement_cache
+
+                opens = store.price_panel(list(prices.columns), field="open")
+                raw_px = store.price_panel(list(prices.columns), adjust="none", field="close")
+                amt_px = store.price_panel(list(prices.columns), field="amount")
+                cache = load_statement_cache(store, list(pit.all_symbols) if pit is not None else None)
+                pit_results = evaluate_screens(
+                    settings,
+                    close=prices,
+                    membership=membership,
+                    opens=opens,
+                    raw_close=raw_px,
+                    amounts=amt_px,
+                    limit_up=limit_up,
+                    limit_down=limit_down,
+                    cache=cache,
+                    names=list(bundle.screens),
+                )
+                notes.append(
+                    "闸门：每月时点重算名单（T 日及之前数据），T+1 开盘成交，涨停买不进；"
+                    "对同池等权超额>0、Sharpe≥等权、前后半段超额都>0。"
+                )
+            except Exception as exc:  # noqa: BLE001
+                notes.append(f"时点闸门失败，回退静态今日名单（该口径可能前视）：{exc}")
+                pit_results = None
+        gate_benches = dict(benches)
+        if pit_results and pit_results.get("universe_ew") is not None:
+            gate_benches["universe_ew"] = pit_results["universe_ew"]
         for name, srows in bundle.screens.items():
-            picks = [r.symbol for r in srows[: settings.backtest.top_n]]
-            bt = backtest_screen(
-                prices,
-                picks,
-                settings.backtest,
-                screen=name,
-                delist=delist,
-                asof=on,
-                limit_up=limit_up,
-                limit_down=limit_down,
-                membership=membership,
-                universe_note=universe_note,
-            )
-            attach_benchmarks(bt, benches, sanity_max_ann_gap=settings.backtest.sanity_max_ann_gap)
+            if pit_results and name in pit_results:
+                bt = pit_results[name]
+            else:
+                picks = [r.symbol for r in srows[: settings.backtest.top_n]]
+                bt = backtest_screen(
+                    prices,
+                    picks,
+                    settings.backtest,
+                    screen=name,
+                    delist=delist,
+                    asof=on,
+                    limit_up=limit_up,
+                    limit_down=limit_down,
+                    membership=membership,
+                    universe_note=universe_note,
+                )
+            attach_benchmarks(bt, gate_benches, sanity_max_ann_gap=settings.backtest.sanity_max_ann_gap)
             finalize_gate(bt, settings.backtest)
             backtests[name] = bt.to_dict()
             if not bt.passed_gate:
                 gated.append(name)
                 notes.append(
-                    f"公式 {name} 回测未达标（对同池等权超额须>0 且 Sharpe 不低于等权），"
-                    "公式分不计入总分，仅单票详情展示。"
+                    f"公式 {name} 回测未达标（对同池等权超额须>0、Sharpe 不低于等权、"
+                    "前后半段超额都>0），公式分不计入总分，仅单票详情展示。"
                 )
         for name in gated:
             active_screens.pop(name, None)

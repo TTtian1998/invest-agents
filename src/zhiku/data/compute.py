@@ -128,11 +128,19 @@ def ncav_of(balance: dict[str, Any] | None) -> float | None:
     return ca - tl
 
 
-def dist_to_high(closes: pd.Series | None, window: int = 252) -> float | None:
+def _closes_asof(closes: pd.Series | None, asof=None) -> pd.Series | None:
     if closes is None or getattr(closes, "empty", True):
         return None
-    s = closes.dropna().astype(float)
-    if len(s) < 20:
+    s = closes.dropna().astype(float).sort_index()
+    if asof is not None and len(s) > 0:
+        s = s.loc[: pd.Timestamp(asof)]
+    return None if s.empty else s
+
+
+def dist_to_high(closes: pd.Series | None, window: int = 252, *, asof=None) -> float | None:
+    """距窗口最高收盘的距离。只用 asof（含）之前的收盘；asof 缺省则用整列。"""
+    s = _closes_asof(closes, asof)
+    if s is None or len(s) < 20:
         return None
     peak = float(s.iloc[-window:].max()) if len(s) >= 2 else None
     last = float(s.iloc[-1])
@@ -249,9 +257,10 @@ def consecutive_div_years(ex_dates: list[date], asof: date) -> int | None:
     return n
 
 
-def momentum_12_1(closes: pd.Series) -> float | None:
-    s = closes.dropna().astype(float).sort_index()
-    if len(s) < 252:
+def momentum_12_1(closes: pd.Series, *, asof=None) -> float | None:
+    """12−1 动量：收盘[-22]/收盘[-252]−1。只用 asof（含）之前的收盘。"""
+    s = _closes_asof(closes, asof)
+    if s is None or len(s) < 252:
         return None
     m1 = float(s.iloc[-22]) if len(s) >= 22 else None
     m12 = float(s.iloc[-252])

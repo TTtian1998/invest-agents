@@ -17,6 +17,7 @@ class BacktestResult:
     win_rate: float | None
     turnover: float | None
     years: dict[str, float] = field(default_factory=dict)
+    year_excess: dict[str, float] = field(default_factory=dict)
     equity: list[tuple[str, float]] = field(default_factory=list)
     benchmark_annualized: float | None = None
     beat_benchmark: bool | None = None
@@ -24,6 +25,17 @@ class BacktestResult:
     notes: list[str] = field(default_factory=list)
     passed_gate: bool = True
     excess_annualized: float | None = None
+    excess_first_half: float | None = None
+    excess_second_half: float | None = None
+    deflated_sharpe: float | None = None
+    dsr_prob: float | None = None
+    n_trials: int | None = None
+    two_way_turnover: float | None = None
+    one_way_cost_bps: float | None = None
+    two_way_cost_bps: float | None = None
+    blocked_buys: int | None = None
+    fill: str | None = None
+    robustness: dict = field(default_factory=dict)
     benchmarks: dict[str, dict] = field(default_factory=dict)
     sanity_ok: bool | None = None
     sanity_note: str | None = None
@@ -37,6 +49,7 @@ class BacktestResult:
             "win_rate": self.win_rate,
             "turnover": self.turnover,
             "years": self.years,
+            "year_excess": self.year_excess,
             "equity": self.equity,
             "benchmark_annualized": self.benchmark_annualized,
             "beat_benchmark": self.beat_benchmark,
@@ -44,6 +57,17 @@ class BacktestResult:
             "notes": self.notes,
             "passed_gate": self.passed_gate,
             "excess_annualized": self.excess_annualized,
+            "excess_first_half": self.excess_first_half,
+            "excess_second_half": self.excess_second_half,
+            "deflated_sharpe": self.deflated_sharpe,
+            "dsr_prob": self.dsr_prob,
+            "n_trials": self.n_trials,
+            "two_way_turnover": self.two_way_turnover,
+            "one_way_cost_bps": self.one_way_cost_bps,
+            "two_way_cost_bps": self.two_way_cost_bps,
+            "blocked_buys": self.blocked_buys,
+            "fill": self.fill,
+            "robustness": self.robustness,
             "benchmarks": self.benchmarks,
             "sanity_ok": self.sanity_ok,
             "sanity_note": self.sanity_note,
@@ -201,6 +225,196 @@ def monthly_equal_weight(
     series = pd.Series({d: v for d, v in nav_pts})
     avg_to = float(np.mean(turnovers)) if turnovers else 0.0
     return series, avg_to
+
+
+def split_half_excess(nav: pd.Series, bench: pd.Series) -> tuple[float | None, float | None]:
+    """前后半段年化超额。共用中点净值，两段各自至少 2 个点。"""
+    nav = nav.dropna().astype(float)
+    bench = bench.reindex(nav.index).dropna().astype(float)
+    common = nav.index.intersection(bench.index)
+    if len(common) < 4:
+        return None, None
+    mid = len(common) // 2
+    first = common[: mid + 1]
+    second = common[mid:]
+    if len(first) < 2 or len(second) < 2:
+        return None, None
+    a0, b0 = _ann_return(nav.loc[first]), _ann_return(bench.loc[first])
+    a1, b1 = _ann_return(nav.loc[second]), _ann_return(bench.loc[second])
+    first_ex = None if a0 is None or b0 is None else a0 - b0
+    second_ex = None if a1 is None or b1 is None else a1 - b1
+    return first_ex, second_ex
+
+
+def year_excesses(nav: pd.Series, bench: pd.Series) -> dict[str, float]:
+    nav = nav.dropna().astype(float)
+    bench = bench.reindex(nav.index).dropna().astype(float)
+    common = nav.index.intersection(bench.index)
+    if common.empty:
+        return {}
+    out: dict[str, float] = {}
+    frame = pd.DataFrame({"nav": nav.loc[common], "bench": bench.loc[common]})
+    for year, g in frame.groupby(frame.index.year):
+        if len(g) < 2:
+            continue
+        a = float(g["nav"].iloc[-1] / g["nav"].iloc[0] - 1.0) if float(g["nav"].iloc[0]) else None
+        b = float(g["bench"].iloc[-1] / g["bench"].iloc[0] - 1.0) if float(g["bench"].iloc[0]) else None
+        if a is None or b is None:
+            continue
+        out[str(year)] = a - b
+    return out
+
+
+def _snap_on_or_before(index: pd.DatetimeIndex, dt) -> pd.Timestamp | None:
+    if index.empty:
+        return None
+    loc = index.searchsorted(pd.Timestamp(dt), side="right") - 1
+    if loc < 0:
+        return None
+    return index[int(loc)]
+
+
+def _next_after(index: pd.DatetimeIndex, dt) -> pd.Timestamp | None:
+    if index.empty:
+        return None
+    loc = index.searchsorted(pd.Timestamp(dt), side="right")
+    if loc >= len(index):
+        return None
+    return index[int(loc)]
+
+
+def rebalance_equal_weight(
+    prices: pd.DataFrame,
+    picks_by_date: dict,
+    *,
+    opens: pd.DataFrame | None = None,
+    cost_bps: float = 10.0,
+    slippage_bps: float = 5.0,
+    limit_up: pd.DataFrame | None = None,
+    limit_down: pd.DataFrame | None = None,
+    membership: dict | None = None,
+    fill: str = "next_open",
+) -> tuple[pd.Series, float, dict]:
+    """时点名单再平衡。默认调仓日 T 之后下一根 K 线开盘成交；涨停买不进、跌停卖不出。
+
+    ``picks_by_date`` 的键是决策日 T。``fill='next_open'`` 在 T 之后第一个交易日用开盘价
+    （缺开盘则用收盘并记一笔）。``fill='decision_close'`` 在 T 收盘成交（旧口径）。
+    换手 ``tw = 0.5 * Σ|Δw|`` 为单边；扣费 ``tw * (cost+slippage)/10000``。
+    """
+    from zhiku.backtest.universe import members_on
+
+    px = prices.copy()
+    px.index = pd.to_datetime(px.index)
+    px = px.sort_index()
+    op = None
+    if opens is not None and not opens.empty:
+        op = opens.copy()
+        op.index = pd.to_datetime(op.index)
+        op = op.sort_index().reindex(px.index)
+    calendar = px.index
+    keyed = {}
+    for key, names in picks_by_date.items():
+        keyed[pd.Timestamp(key)] = [str(s) for s in names]
+    decisions = sorted(keyed)
+    if not decisions or calendar.empty:
+        return pd.Series(dtype=float), 0.0, {"fill": fill, "blocked_buys": 0}
+
+    events: list[tuple[pd.Timestamp, pd.Timestamp, list[str]]] = []
+    for dt in decisions:
+        snapped = _snap_on_or_before(calendar, dt)
+        if snapped is None:
+            continue
+        fill_dt = snapped if fill == "decision_close" else _next_after(calendar, snapped)
+        if fill_dt is None:
+            continue
+        events.append((dt, fill_dt, keyed[dt]))
+
+    if not events:
+        return pd.Series(dtype=float), 0.0, {"fill": fill, "blocked_buys": 0}
+
+    fills = [e[1] for e in events]
+    cols = sorted({c for *_, names in events for c in names if c in px.columns})
+    if not cols:
+        return pd.Series(dtype=float), 0.0, {"fill": fill, "blocked_buys": 0}
+
+    exec_px = op if op is not None and fill != "decision_close" else px
+    used_close_fallback = 0
+    up = _align_limit(limit_up, pd.DatetimeIndex(fills), cols)
+    down = _align_limit(limit_down, pd.DatetimeIndex(fills), cols)
+
+    nav_pts = []
+    turnovers = []
+    prev_w = pd.Series(0.0, index=cols)
+    nav = 1.0
+    cost = (cost_bps + slippage_bps) / 10000.0
+    blocked_buys = 0
+    for i, (decision_dt, fill_dt, names) in enumerate(events):
+        allowed = members_on(membership, decision_dt) if membership is not None else None
+        row = exec_px.loc[fill_dt] if fill_dt in exec_px.index else px.loc[fill_dt]
+        if fill != "decision_close" and op is not None:
+            close_row = px.loc[fill_dt]
+            row = row.copy()
+            missing = [c for c in cols if pd.isna(row.get(c)) and pd.notna(close_row.get(c))]
+            for c in missing:
+                row[c] = close_row[c]
+                used_close_fallback += 1
+
+        avail = [c for c in names if c in cols and (allowed is None or c in allowed) and pd.notna(row.get(c))]
+        stuck = []
+        if fill_dt in down.index:
+            stuck = [c for c in cols if bool(down.loc[fill_dt].get(c)) and float(prev_w.get(c, 0) or 0) > 0]
+        blocked = []
+        if fill_dt in up.index:
+            blocked = [c for c in avail if bool(up.loc[fill_dt].get(c)) and float(prev_w.get(c, 0) or 0) <= 0]
+        blocked_buys += len(blocked)
+        tradable = [c for c in avail if c not in blocked or c in stuck]
+        if not tradable and not stuck:
+            nav_pts.append((fill_dt, nav))
+            continue
+        free = [c for c in tradable if c not in stuck]
+        stuck_weight = float(prev_w.reindex(stuck).fillna(0).sum()) if stuck else 0.0
+        remain = max(0.0, 1.0 - stuck_weight)
+        w = pd.Series(0.0, index=cols)
+        for c in stuck:
+            w[c] = float(prev_w.get(c, 0) or 0)
+        if free and remain > 0:
+            for c in free:
+                w[c] = remain / len(free)
+        tw = 0.5 * float((w.reindex(cols).fillna(0) - prev_w.reindex(cols).fillna(0)).abs().sum())
+        turnovers.append(tw)
+        nav *= 1.0 - tw * cost
+        if i > 0:
+            prev_fill = fills[i - 1]
+            prev_row = exec_px.loc[prev_fill] if prev_fill in exec_px.index else px.loc[prev_fill]
+            if fill != "decision_close" and op is not None:
+                prev_close = px.loc[prev_fill]
+                prev_row = prev_row.copy()
+                for c in cols:
+                    if pd.isna(prev_row.get(c)) and pd.notna(prev_close.get(c)):
+                        prev_row[c] = prev_close[c]
+            ret = 0.0
+            held = [c for c in cols if float(prev_w.get(c, 0) or 0) > 0]
+            for c in held:
+                p0, p1 = prev_row.get(c), row.get(c)
+                if pd.notna(p0) and pd.notna(p1) and float(p0) != 0:
+                    ret += float(prev_w.get(c, 0) or 0) * (float(p1) / float(p0) - 1.0)
+            nav *= 1.0 + ret
+        prev_w = w.reindex(cols).fillna(0)
+        nav_pts.append((fill_dt, nav))
+
+    series = pd.Series({d: v for d, v in nav_pts})
+    avg_to = float(np.mean(turnovers)) if turnovers else 0.0
+    extras = {
+        "fill": fill if fill == "decision_close" or op is not None else "next_close_fallback",
+        "blocked_buys": blocked_buys,
+        "one_way_turnover": avg_to,
+        "two_way_turnover": 2.0 * avg_to,
+        "one_way_cost_bps": cost_bps + slippage_bps,
+        "two_way_cost_bps": 2.0 * (cost_bps + slippage_bps),
+        "close_fallback_fills": used_close_fallback,
+        "n_rebals": len(turnovers),
+    }
+    return series, avg_to, extras
 
 
 def _align_limit(mask: pd.DataFrame | None, index: pd.Index, cols: list[str]) -> pd.DataFrame:

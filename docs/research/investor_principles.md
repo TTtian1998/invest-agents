@@ -182,6 +182,10 @@ A 股：两人的公开框架接近质量投资；不新开同名选股公式，
 | 周期 / 认错 / 止损 / 凯利 | Marks 2011；Thorp 2006；Kelly 1956 | 可选仓位，不进选股 |
 | 反身性 / 大奖章 / 事项驱动 / 全天候 | 缺可复现面板或不是选股 | 不做公式 |
 
+## 过闸口径
+
+静态「今日 Top-N 持有三年」会把动量公式的未来涨幅算进历史，不算数。闸门必须：每月在调仓日 T 用 T 及之前的数据重算名单；T+1 开盘成交；涨停买不进、跌停卖不出；对**当时同一股票池**等权超额 > 0、Sharpe ≥ 等权；**前后半段超额都 > 0**。已测公式的 Sharpe 同时报告 Bailey & López de Prado (2014) deflated Sharpe。未过闸的公式分不进每日总分。
+
 ## 参考文献
 
 1. Graham, B., & Dodd, D. (1934). *Security Analysis*. McGraw-Hill.
@@ -215,3 +219,4 @@ A 股：两人的公开框架接近质量投资；不新开同名选股公式，
 29. Taleb, N. N. (2012). *Antifragile*. Random House.
 30. Mitchell, M., & Pulvino, T. (2001). Characteristics of risk and return in risk arbitrage. *Journal of Finance*, 56(6), 2135–2175.
 31. 张磊 (2020). 《价值》. 浙江教育出版社.
+32. Bailey, D. H., & López de Prado, M. (2014). The deflated Sharpe ratio: Correcting for selection bias, backtest overfitting, and non-normality. *Journal of Portfolio Management*, 40(5), 94–107.
