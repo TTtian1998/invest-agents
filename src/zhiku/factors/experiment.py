@@ -347,6 +347,7 @@ def walk_forward_fold_metrics(
         y = label.reindex(part.index)
         payload = _eval_split(part, y, econ.reindex(part.index) if econ is not None else None)
         own = payload.get("own_label") or {}
+        xs = payload.get("t20_xs") or {}
         rows.append(
             {
                 "fold": name,
@@ -356,7 +357,9 @@ def walk_forward_fold_metrics(
                 "rank_ic": own.get("rank_ic"),
                 "rank_icir": own.get("rank_icir"),
                 "q5_q1": own.get("q5_q1"),
-                "t20_xs": (payload.get("t20_xs") or {}),
+                "t20_xs": xs,
+                "t20_rank_ic": xs.get("rank_ic"),
+                "t20_rank_icir": xs.get("rank_icir"),
             }
         )
     ics = [float(r["rank_ic"]) for r in rows if r.get("rank_ic") is not None]
@@ -1202,12 +1205,13 @@ def _write_fold_md(out_dir: Path, rows: list[ExperimentResult]) -> None:
             f"正折 {dist.get('n_positive')}/{dist.get('n_with_ic')}"
         )
         lines.append("")
-        lines.append("| 折 | 起 | 止 | n | RankIC | RankICIR | Q5-Q1 |")
-        lines.append("| --- | --- | --- | ---: | ---: | ---: | ---: |")
+        lines.append("| 折 | 起 | 止 | n | 本标签 RankIC | 本标签 IR | T+20同池 RankIC | T+20同池 IR |")
+        lines.append("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |")
         for f in folds:
             lines.append(
                 f"| {f.get('fold')} | {f.get('start')} | {f.get('end')} | {f.get('n', 0)} | "
-                f"{_fmt(f.get('rank_ic'))} | {_fmt(f.get('rank_icir'))} | {_fmt(f.get('q5_q1'))} |"
+                f"{_fmt(f.get('rank_ic'))} | {_fmt(f.get('rank_icir'))} | "
+                f"{_fmt(f.get('t20_rank_ic'))} | {_fmt(f.get('t20_rank_icir'))} |"
             )
         lines.append("")
     out_dir.mkdir(parents=True, exist_ok=True)

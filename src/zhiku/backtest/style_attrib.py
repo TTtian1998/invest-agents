@@ -221,19 +221,29 @@ def style_rotation_stats(excess: pd.Series, vg: pd.Series) -> dict[str, Any]:
     h2 = common[len(common) // 2 :]
     h2_vg = float(style.loc[h2].mean()) if len(h2) else None
     h2_xs = float(xs.loc[h2].mean()) if len(h2) else None
-    rotation = bool(corr is not None and corr > 0.25 and h2_vg is not None and h2_vg < 0 and (h2_xs or 0) < 0)
+    val_mu = float(val_on.mean()) if not val_on.empty else None
+    grw_mu = float(grw_on.mean()) if not grw_on.empty else None
+    # 高相关 + 价值月赚、成长月亏 = 风格暴露。闸门后半段年化超额另表，不和 V-G 可配对样本的中点混用。
+    rotation = bool(
+        corr is not None
+        and corr > 0.25
+        and val_mu is not None
+        and grw_mu is not None
+        and val_mu > 0
+        and grw_mu < 0
+    )
     return {
         "n": int(len(common)),
         "corr_excess_vg": corr,
-        "mean_excess_when_value_wins": float(val_on.mean()) if not val_on.empty else None,
-        "mean_excess_when_growth_wins": float(grw_on.mean()) if not grw_on.empty else None,
+        "mean_excess_when_value_wins": val_mu,
+        "mean_excess_when_growth_wins": grw_mu,
         "h2_mean_vg": h2_vg,
         "h2_mean_excess": h2_xs,
         "rotation": rotation,
         "reason": (
-            "后半段成长占优且价值类超额为负，相关为正，判为风格轮动"
+            f"与价值−成长相关 {corr:.2f}，价值月超额为正、成长月为负，判为风格暴露/轮动"
             if rotation
-            else "相关弱或后半段不是成长占优，不能单靠风格轮动解释"
+            else "相关弱或价值/成长月超额同号，不能单靠风格轮动解释"
         ),
     }
 

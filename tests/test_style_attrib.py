@@ -62,6 +62,15 @@ def test_style_rotation_flags_growth_second_half() -> None:
     assert stats["corr_excess_vg"] > 0.25
 
 
+def test_style_rotation_flags_high_corr_even_if_h2_vg_flat() -> None:
+    idx = pd.bdate_range("2024-01-31", periods=12, freq="BME")
+    vg = pd.Series([0.05, -0.04, 0.06, -0.05, 0.04, -0.03, 0.02, -0.01, 0.03, -0.02, 0.01, 0.00], index=idx)
+    excess = vg * 0.8
+    stats = style_rotation_stats(excess, vg)
+    assert stats["rotation"] is True
+    assert stats["corr_excess_vg"] > 0.8
+
+
 def test_value_minus_growth_uses_low_pb() -> None:
     dates = pd.to_datetime(["2024-01-31", "2024-02-29"])
     syms = [f"S{i}" for i in range(12)]
