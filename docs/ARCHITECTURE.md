@@ -63,13 +63,13 @@ flowchart LR
 
 ## 包布局
 
-- `zhiku/data`：`zk data sync` 增量落地到 `ZHIKU_KB/data`（列表、指数成分、日线、东财整表 + 新浪明细、整表分红）。增量用当日截面写一根日线，避免逐只 hist。缺字段记 `MissingData`，不插值、不进 git。
-- `zhiku/screens`：Greenblatt / Piotroski / 低估值高分红（`require_quality=false`）/ 质量+动量。
-- `zhiku/factors`：本地库 → qlib bin；同时训 Alpha158 与 lgb_lite，按 RankIC/IC/ICIR 写 `selected.pkl`；按月重训。
-- `zhiku/backtest`：live 用本地库价格；成本/滑点；涨停不可买、跌停不可卖；公告日 PIT + 退市截断。
-- `zhiku/news`：扫描、聚合、价量确认、**信源分级**、X 大V 跟踪、机会、分析层。
-- `zhiku/events`：预期差、新颖度/半衰期（历史事件研究估算）、拥挤度、产业链 YAML/CSV+地缘传导、失效/时间止损、黑天鹅协议、PIT 财务、只追加决策日志。应急模式对触发线禁加。
-- `zhiku/macro`：日历、预期差、事件剧本、传导链 YAML、事件窗口、利率近似。
+- `zhiku/data`：`zk data sync` 增量落地到 `ZHIKU_KB/data`。增量截面只写不复权；前复权按上一根 qfq × (当日 none / 上日 none) 平移，禁止把原始收盘写入 qfq。缺字段记 `MissingData`，不插值、不进 git。
+- `zhiku/screens`：Greenblatt / Piotroski / 低估值高分红（`require_quality=false`）/ 质量+动量。未过闸公式分不进总分。
+- `zhiku/factors`：本地库 → qlib bin；同时训 Alpha158 与 lgb_lite；标签为 T+1 开到 T+k 收（lite）或 T+1 收到 T+2 收（Alpha158）；按 RankICIR→RankIC 均值写 `selected.pkl`；报告五分位。
+- `zhiku/backtest`：live 用本地库前复权；清洗末日复权混入；成本/滑点；涨跌停；对照全池等权与 510300/000300/000906；超额与合理性断言。
+- `zhiku/news`：扫描、聚合、价量确认、**信源分级**、X 大V 跟踪、机会（理由/失效/时间止损/信源，含 A 股代码挂接）、分析层。live 现价与基本面来自本地库。
+- `zhiku/events`：预期差、新颖度、拥挤、传导、失效/时间止损、黑天鹅。应急必须 VIX/指数价格确认，关键词单独不触发。live 不读 blackswan/consensus fixture。
+- `zhiku/macro`：核心日历白名单、公开 FOMC 补充、预期差、剧本、窗口、利率。live 利率/地缘无真实数据则「缺数据」。
 - `zhiku/analyze.py`：共享分析卡片；无 key 降级并标「未做深度分析」。
 - `zhiku/engine`：触发线与成长仓闸门；LLM 不进入。
 - `zhiku/app`：Streamlit，含「今日舆情」「大V动态」「多空机会」「宏观与事件」。

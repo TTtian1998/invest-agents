@@ -86,6 +86,8 @@ class BacktestSettings(BaseModel):
     min_sharpe: float = 0.0
     require_beat_benchmark: bool = False
     top_n: int = 3
+    benchmark_symbols: list[str] = Field(default_factory=lambda: ["510300", "000300", "000906"])
+    sanity_max_ann_gap: float = 0.25
 
 
 class AISettings(BaseModel):
@@ -212,6 +214,36 @@ class MacroSettings(BaseModel):
     gdelt_enabled: bool = False
     fedwatch_approx: bool = True
     horizon_days: int = 7
+    window_event_types: list[str] = Field(
+        default_factory=lambda: [
+            "US_NFP",
+            "US_UNEMP",
+            "US_CPI",
+            "US_CORE_CPI",
+            "US_PCE",
+            "US_PPI",
+            "US_GDP",
+            "US_RETAIL",
+            "US_ISM_MFG",
+            "FOMC",
+            "FOMC_DOTS",
+            "ECB",
+            "BOJ",
+            "BOE",
+            "SNB",
+            "RBA",
+            "PBOC",
+            "CN_CPI",
+            "CN_PPI",
+            "CN_GDP",
+            "CN_SF",
+            "CN_LPR",
+            "CN_M2",
+            "CN_PMI",
+            "CN_RRR",
+            "CN_RATE",
+        ]
+    )
 
     def window_for(self, event_type: str) -> dict:
         rule = self.windows.get(event_type) or self.windows.get("default") or EventWindowRule()
@@ -289,6 +321,7 @@ class EventSettings(BaseModel):
         ]
     )
     emergency_min_sources: int = 2
+    require_price_confirm: bool = True
     freeze_adds_on_emergency: bool = True
     alert_on_emergency: bool = True
     playbook: list[str] = Field(

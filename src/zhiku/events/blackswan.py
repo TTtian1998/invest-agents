@@ -40,6 +40,54 @@ def load_shock_fixture(path: Path) -> dict:
     return raw if isinstance(raw, dict) else {}
 
 
+def live_shock(*, store=None) -> dict:
+    """VIX 与沪深300 价格确认。失败返回空 dict，不回落 fixture。"""
+    out: dict = {}
+    try:
+        import yfinance as yf
+    except ImportError:
+        out["missing"] = "缺数据：未安装 yfinance，无法取 VIX/指数"
+        return out
+    try:
+        vix = yf.Ticker("^VIX").history(period="5d")
+        close = vix["Close"].dropna() if vix is not None and not vix.empty else None
+        if close is not None and len(close) >= 2 and float(close.iloc[-2]) != 0:
+            out["vix_change"] = float(close.iloc[-1]) / float(close.iloc[-2]) - 1.0
+            out["vix_level"] = float(close.iloc[-1])
+        else:
+            out["vix_missing"] = "缺数据：VIX 行情不足"
+    except Exception as exc:  # noqa: BLE001
+        out["vix_missing"] = f"缺数据：VIX {exc}"
+    idx = None
+    try:
+        hist = yf.Ticker("000300.SS").history(period="5d")
+        close = hist["Close"].dropna() if hist is not None and not hist.empty else None
+        if close is not None and len(close) >= 2 and float(close.iloc[-2]) != 0:
+            idx = float(close.iloc[-1]) / float(close.iloc[-2]) - 1.0
+            out["index_symbol"] = "000300.SS"
+    except Exception as exc:  # noqa: BLE001
+        out["index_missing"] = f"缺数据：000300.SS {exc}"
+    if idx is None and store is not None:
+        for symbol, adjust in (("510300", "none"), ("510300", "qfq"), ("000300", "qfq")):
+            last = store.last_bar(symbol, adjust)
+            if not last or last.get("date") is None or last.get("close") is None:
+                continue
+            from datetime import date as _date
+
+            raw_d = last["date"]
+            last_d = _date.fromisoformat(str(raw_d)[:10])
+            prev = store.last_bar(symbol, adjust, before=last_d)
+            if prev and prev.get("close") and float(prev["close"]) != 0:
+                idx = float(last["close"]) / float(prev["close"]) - 1.0
+                out["index_symbol"] = symbol
+                break
+    if idx is not None:
+        out["index_intraday"] = idx
+    elif "index_missing" not in out:
+        out["index_missing"] = "缺数据：无指数涨跌"
+    return out
+
+
 def detect_emergency(
     *,
     clusters: list[ClusteredNews],
@@ -60,12 +108,11 @@ def detect_emergency(
         idx_f = float(index_drop) if index_drop is not None else None
     except (TypeError, ValueError):
         idx_f = None
+    price_reasons: list[str] = []
     if vix_f is not None and vix_f >= settings.vix_spike:
-        reasons.append(f"VIX 单日涨幅 {vix_f:.0%} 超过阈值 {settings.vix_spike:.0%}")
-    elif vix is None:
-        pass
+        price_reasons.append(f"VIX 单日涨幅 {vix_f:.0%} 超过阈值 {settings.vix_spike:.0%}")
     if idx_f is not None and idx_f <= -abs(settings.index_intraday_drop):
-        reasons.append(f"指数盘中跌幅 {idx_f:.0%} 超过阈值 {settings.index_intraday_drop:.0%}")
+        price_reasons.append(f"指数跌幅 {idx_f:.0%} 超过阈值 {settings.index_intraday_drop:.0%}")
     keys = tuple(settings.emergency_keywords)
     hits: list[str] = []
     sources: set[str] = set()
@@ -79,9 +126,22 @@ def detect_emergency(
             }
             sources |= {s for s in srcs if s}
             hits.append(cluster.headline)
+    keyword_reason = None
     if len(sources) >= settings.emergency_min_sources and hits:
-        reasons.append(f"{len(sources)} 个快讯源同时出现冲突/制裁/监管关键词")
-    active = bool(reasons)
+        keyword_reason = f"{len(sources)} 个快讯源同时出现冲突/制裁/监管关键词"
+    require_price = bool(getattr(settings, "require_price_confirm", True))
+    price_confirmed = bool(price_reasons)
+    if price_reasons:
+        reasons.extend(price_reasons)
+        if keyword_reason:
+            reasons.append(keyword_reason)
+    elif keyword_reason and not require_price:
+        reasons.append(keyword_reason)
+    elif keyword_reason and require_price:
+        reasons.append(keyword_reason + "（仅关键词，价格未确认，不进入应急）")
+    active = bool(price_reasons) or (bool(reasons) and not require_price)
+    if require_price:
+        active = bool(price_reasons)
     book = list(playbook or settings.playbook)
     affected = sorted(holdings) if holdings else []
     hedges = [
@@ -89,11 +149,36 @@ def detect_emergency(
         "A 股：反向 ETF 或降低新开仓（融券权限缺数据）",
         "不输出任何真实账户或数量",
     ]
+    metrics = {
+        "vix_change": vix_f,
+        "vix_threshold": settings.vix_spike,
+        "index_intraday": idx_f,
+        "index_threshold": -abs(settings.index_intraday_drop),
+        "index_symbol": shock.get("index_symbol"),
+        "vix_missing": shock.get("vix_missing") or shock.get("missing"),
+        "index_missing": shock.get("index_missing"),
+        "require_price_confirm": require_price,
+    }
+    if not active and keyword_reason and require_price:
+        # 保留说明，但不启动应急
+        display_reasons = [keyword_reason + "（仅关键词，价格未确认，不进入应急）"]
+        if vix_f is not None:
+            display_reasons.append(f"VIX 变动 {vix_f:.1%}（阈值 {settings.vix_spike:.0%}）")
+        elif shock.get("vix_missing") or shock.get("missing"):
+            display_reasons.append(str(shock.get("vix_missing") or shock.get("missing")))
+        if idx_f is not None:
+            display_reasons.append(f"指数变动 {idx_f:.1%}（阈值 {-abs(settings.index_intraday_drop):.0%}）")
+        elif shock.get("index_missing"):
+            display_reasons.append(str(shock["index_missing"]))
+        reasons = display_reasons
     return Emergency(
         active=active,
         reasons=reasons,
         playbook=book if active else [],
-        affected=affected,
+        affected=affected if active else [],
         hedges=hedges if active else [],
         freeze_adds=bool(active and settings.freeze_adds_on_emergency),
+        price_confirmed=price_confirmed,
+        keyword_hits=hits[:8],
+        metrics=metrics,
     )

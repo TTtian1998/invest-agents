@@ -23,6 +23,10 @@ class BacktestResult:
     engine: str = "pandas"
     notes: list[str] = field(default_factory=list)
     passed_gate: bool = True
+    excess_annualized: float | None = None
+    benchmarks: dict[str, dict] = field(default_factory=dict)
+    sanity_ok: bool | None = None
+    sanity_note: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -39,6 +43,10 @@ class BacktestResult:
             "engine": self.engine,
             "notes": self.notes,
             "passed_gate": self.passed_gate,
+            "excess_annualized": self.excess_annualized,
+            "benchmarks": self.benchmarks,
+            "sanity_ok": self.sanity_ok,
+            "sanity_note": self.sanity_note,
         }
 
 

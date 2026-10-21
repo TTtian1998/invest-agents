@@ -84,10 +84,16 @@ def make_feature_panel(bars: pd.DataFrame) -> pd.DataFrame:
 
 
 def label_forward(bars: pd.DataFrame, horizon: int = 5) -> pd.Series:
+    """标签：T+1 开盘 → T+horizon 收盘，避免把当日收盘同时当特征和收益起点。"""
     df = bars.copy()
     df["date"] = pd.to_datetime(df["date"])
     close = df.pivot(index="date", columns="symbol", values="close").sort_index().astype(float)
-    fwd = close.shift(-horizon) / close - 1.0
+    if "open" in df.columns:
+        open_ = df.pivot(index="date", columns="symbol", values="open").sort_index().astype(float)
+        entry = open_.shift(-1)
+    else:
+        entry = close.shift(-1)
+    fwd = close.shift(-horizon) / entry - 1.0
     s = fwd.stack()
     s.name = "label"
     s.index = s.index.set_names(["date", "symbol"])

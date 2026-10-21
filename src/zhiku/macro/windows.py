@@ -35,7 +35,10 @@ def build_windows(
 ) -> list[EventWindow]:
     out: list[EventWindow] = []
     default = settings.window_for("default")
+    allowed = set(settings.window_event_types or [])
     for ev in events:
+        if allowed and ev.event_type not in allowed:
+            continue
         if ev.importance < settings.min_window_importance:
             continue
         when = to_shanghai(ev.scheduled_at)

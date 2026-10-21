@@ -94,6 +94,9 @@ def run_news(
     quality_passed: set[str] | None = None,
     settings: PipelineSettings | None = None,
     macro_bundle=None,
+    funds: list[Fundamentals] | None = None,
+    prices: dict[str, float] | None = None,
+    name_map: dict[str, str] | None = None,
 ) -> NewsBundle:
     settings = settings or load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
     notes: list[str] = []
@@ -154,6 +157,12 @@ def run_news(
         notes.append("未找到私有持仓文件，机会中不输出与持仓的相关性。")
 
     clusters = cluster_items(items, holdings)
+    if provider_kind == "live" and name_map:
+        from zhiku.news.tickers import attach_cn_tickers
+
+        n_cn = attach_cn_tickers(clusters, name_map)
+        if n_cn:
+            notes.append(f"A 股新闻挂上代码 {n_cn} 条（按股票池名称/6 位代码）。")
     rx_map = {(r.symbol, r.on): r for r in reactions}
     attach_reactions(clusters, rx_map, on)
     prev = load_previous_fingerprints(paths.reports / "latest-news.json")
@@ -180,21 +189,29 @@ def run_news(
         source_hitrate,
     )
 
-    followups = load_followups(fixture_news)
+    followups = load_followups(fixture_news) if provider_kind != "live" else []
     apply_followups(clusters, followups)
-    track = load_institution_track(paths.fixtures / "institution_track.yaml")
-    journal_track = load_institution_track(paths.journal / "institution_track.json")
-    track = {**track, **journal_track}
+    if provider_kind == "live":
+        track = load_institution_track(paths.journal / "institution_track.json")
+    else:
+        track = load_institution_track(paths.fixtures / "institution_track.yaml")
+        journal_track = load_institution_track(paths.journal / "institution_track.json")
+        track = {**track, **journal_track}
     for cluster in clusters:
         if cluster.source_grade == 3:
             cluster.institution_review = review_institution(cluster, track)
 
-    funds: list[Fundamentals] = load_asof_universe(
-        fundamentals_path=paths.fixtures / "fundamentals.yaml",
-        pit_path=paths.fixtures / "pit_fundamentals.yaml",
-        delist_path=paths.fixtures / "delisted.yaml",
-        asof=on,
-    )
+    if funds is None:
+        if provider_kind == "live":
+            funds = []
+            notes.append("live 新闻基本面：用当日股票池，不读 fundamentals.yaml。")
+        else:
+            funds = load_asof_universe(
+                fundamentals_path=paths.fixtures / "fundamentals.yaml",
+                pit_path=paths.fixtures / "pit_fundamentals.yaml",
+                delist_path=paths.fixtures / "delisted.yaml",
+                asof=on,
+            )
     fund_map = {f.symbol: f for f in funds}
     if quality_passed is None and funds:
         passed, _ = filter_universe(funds, settings.quality, settings.universe)
@@ -203,7 +220,9 @@ def run_news(
 
     hist_path = paths.fixtures / "event_history.yaml"
     stats = {}
-    if hist_path.is_file():
+    if provider_kind == "live":
+        notes.append("live 事件历史胜率：缺数据，不回落 event_history.yaml。")
+    elif hist_path.is_file():
         stats = summarize_samples(load_event_history(hist_path))
     hist_wr = {
         k: (v.winrate_t5 if v.winrate_t5 is not None else v.winrate_t1) or 0.5
@@ -213,7 +232,12 @@ def run_news(
     weights = load_weights(weight_path)
     weights = update_weights(weights, stats)
 
-    prices = _prices_from_fund(funds, paths.fixtures / "monthly_prices.csv")
+    if prices is None:
+        if provider_kind == "live":
+            prices = {}
+            notes.append("live 机会现价来自本地库，不读 monthly_prices.csv。")
+        else:
+            prices = _prices_from_fund(funds, paths.fixtures / "monthly_prices.csv")
     window_note = None
     freeze_adds = False
     upcoming: list[dict] = []
@@ -236,7 +260,10 @@ def run_news(
         on=on,
         track=track,
     )
-    hist_calls = load_x_calls(paths.fixtures / "x_calls.yaml")
+    if provider_kind == "live":
+        hist_calls = []
+    else:
+        hist_calls = load_x_calls(paths.fixtures / "x_calls.yaml")
     journal_calls = load_x_calls(paths.journal / "x_calls.jsonl")
     today_calls = key_calls_from_clusters(clusters, on)
     x_hits = summarize_x_hits(hist_calls + journal_calls + today_calls)
@@ -247,7 +274,12 @@ def run_news(
 
     from zhiku.events.layer import apply_event_layer
 
-    samples = load_event_history(hist_path) if hist_path.is_file() else []
+    samples = [] if provider_kind == "live" else (load_event_history(hist_path) if hist_path.is_file() else [])
+    store = None
+    if provider_kind == "live":
+        from zhiku.data.store import MarketStore
+
+        store = MarketStore(paths.data_dir)
     layer = apply_event_layer(
         clusters,
         paths=paths,
@@ -255,6 +287,8 @@ def run_news(
         settings=settings,
         holdings=holdings,
         samples=list(samples),
+        provider_kind=provider_kind,
+        store=store,
     )
     notes.extend(layer.notes)
     if layer.emergency.freeze_adds:

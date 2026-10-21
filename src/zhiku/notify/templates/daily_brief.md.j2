@@ -5,37 +5,48 @@
 ## 宏观锚点
 {% set m = daily.macro or {} %}
 - 地缘：{{ m.geo.temperature if m.geo else "缺数据" }}；利率：{{ m.rate_expectation.source if m.rate_expectation else "缺数据" }}
+{% if m.rate_expectation and m.rate_expectation.note %}
+- 利率备注：{{ m.rate_expectation.note }}
+{% endif %}
 {% if m.window_banners %}
 {% for w in m.window_banners[:4] %}
 - {{ w }}
 {% endfor %}
 {% endif %}
-{% for e in (m.released or [])[:6] %}
+{% for e in (m.released or [])[:4] %}
 - 已公布 {{ e.name }} 预期 {{ e.consensus if e.consensus is not none else "缺数据" }} / 今值 {{ e.actual if e.actual is not none else "缺数据" }} z={{ e.surprise_z if e.surprise_z is not none else "缺数据" }}
 {% endfor %}
-{% for e in (m.calendar_7d or [])[:8] %}
-- 日历 {{ e.name }} {{ e.scheduled_shanghai }} 重要度{{ e.importance }}
+核心日历（未来7天）：
+{% for e in (m.calendar_7d or []) if e.event_type in ["US_NFP","US_CPI","US_CORE_CPI","US_PCE","FOMC","CN_CPI","CN_PPI","CN_GDP","CN_SF","CN_LPR","ECB","BOJ"] %}
+- {{ e.event_type }} {{ e.name }} {{ e.scheduled_shanghai }} 重要度{{ e.importance }}
 {% endfor %}
 
 ## 候选前 20
-股票池 {{ daily.universe_size }}；缺数据 {{ "%.1f"|format((daily.missing_ratio or 0)*100) }}%。
+股票池 {{ daily.universe_size }}；缺数据 {{ "%.1f"|format((daily.missing_ratio or 0)*100) }}%。未过闸公式分不计入总分。
 {% for c in (daily.candidates or [])[:20] %}
-- {{ c.symbol }} {{ c.name }} 总分 {{ "%.1f"|format(c.total or 0) }}（公式 {{ "%.1f"|format(c.formula_score or 0) }} / 量化 {{ "%.1f"|format(c.qlib_score or 0) }}）{{ (c.screens or {})|join(",") }}
+- {{ c.symbol }} {{ c.name }} 总分 {{ "%.1f"|format(c.total or 0) }}（过闸公式 {{ "%.1f"|format(c.formula_score or 0) }} / 量化 {{ "%.1f"|format(c.qlib_score or 0) }}）{{ (c.screens or {})|join(",") }}
 {% endfor %}
 {% if not daily.candidates %}
 - 无候选
 {% endif %}
 
-## 公式回测闸门
+## 公式回测闸门与基准
 {% for name, bt in (daily.backtests or {}).items() %}
-- {{ name }} 年化={{ bt.annualized }} 回撤={{ bt.max_drawdown }} Sharpe={{ bt.sharpe }} {{ "过闸" if bt.passed_gate else "未过闸" }}
+- {{ name }} 年化={{ bt.annualized }} 回撤={{ bt.max_drawdown }} Sharpe={{ bt.sharpe }} 超额={{ bt.excess_annualized }} {{ "过闸" if bt.passed_gate else "对照/未过闸" }}
 {% endfor %}
-qlib {{ daily.qlib.kind if daily.qlib else "未训练" }} IC={{ daily.qlib.ic if daily.qlib else "缺数据" }} RankIC={{ daily.qlib.rank_ic if daily.qlib else "缺数据" }} ICIR={{ daily.qlib.icir if daily.qlib else "缺数据" }}
+{% set q = daily.qlib or {} %}
+qlib 默认 {{ q.kind or "未训练" }} RankIC={{ q.rank_ic if q.rank_ic is not none else "缺数据" }} RankICIR={{ q.rank_icir if q.rank_icir is not none else q.icir }}
+{% set cmp = q.comparison or {} %}
+{% for mk, mm in cmp.items() %}
+{% if mk in ["lgb_lite", "qlib_alpha158"] and mm %}
+- {{ mk }} RankIC={{ mm.rank_ic }} RankICIR={{ mm.rank_icir or mm.icir }} 五分位={{ mm.quintiles }}
+{% endif %}
+{% endfor %}
 
 ## 多空机会
 {% set nws = daily.news or {} %}
-{% for o in (nws.opportunities or [])[:12] %}
-- [{{ o.tier or o.group or "观察" }}] {{ o.symbol or "" }} {{ o.headline or o.title or "" }}
+{% for o in (nws.opportunities or [])[:10] %}
+- [{{ o.tier or "观察" }}] {{ o.direction or "" }} {{ o.symbol or "" }} {{ o.name or "" }} 理由：{{ o.entry_logic or o.risk or "缺数据" }}；失效：{{ o.invalidation or "缺数据" }}；时间止损：{{ o.time_stop_on or o.time_stop or "缺数据" }}；标题：{{ o.trigger_headline or "" }}；信源{{ o.source_grade or "?" }} {{ o.source_grade_label or "" }}
 {% endfor %}
 {% if not nws.opportunities %}
 - 无
@@ -44,12 +55,20 @@ qlib {{ daily.qlib.kind if daily.qlib else "未训练" }} IC={{ daily.qlib.ic if
 ## 新闻与应急
 新闻 {{ (nws.clusters or [])|length }} 条。
 {% set em = nws.emergency or {} %}
-应急：{{ "开启" if em.active else "否" }}{% if em.freeze_adds %}；禁加{% endif %}
-{% for b in (em.playbook or [])[:4] %}
+应急：{{ "开启" if em.active else "否" }}{% if em.freeze_adds %}；禁加{% endif %}{% if em.price_confirmed %}；价格已确认{% elif em.metrics %}；价格未确认{% endif %}
+{% if em.reasons %}
+{% for r in em.reasons[:4] %}
+- 触发：{{ r }}
+{% endfor %}
+{% endif %}
+{% if em.metrics %}
+- 指标：VIX={{ em.metrics.vix_change }} 阈值{{ em.metrics.vix_threshold }}；指数={{ em.metrics.index_intraday }} 阈值{{ em.metrics.index_threshold }}
+{% endif %}
+{% for b in (em.playbook or [])[:3] %}
 - {{ b }}
 {% endfor %}
 
 ## 备注
-{% for n in (daily.notes or [])[:12] %}
+{% for n in (daily.notes or [])[:10] %}
 - {{ n }}
 {% endfor %}

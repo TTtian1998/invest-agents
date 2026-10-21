@@ -190,6 +190,65 @@ def _importance(raw) -> int:
     return 3
 
 
+CONFERENCE_KW = (
+    "大会",
+    "展会",
+    "论坛",
+    "博览会",
+    "博览",
+    "药交会",
+    "车展",
+    "开幕式",
+    "研讨会",
+    "智能网联",
+    "产业峰会",
+    "展览",
+)
+CB_KW = ("央行", "联储", "FOMC", "ECB", "日银", "欧央行", "议息", "利率决议", "PBOC")
+
+
+def _is_conference_noise(name: str) -> bool:
+    if any(k in name for k in CB_KW):
+        return False
+    return any(k in name for k in CONFERENCE_KW)
+
+
+def official_core_events(on: date, horizon_days: int = 7) -> list[MacroEvent]:
+    """公开日程补充：美联储例会等。不是预测，只填日历缺口。"""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    et = ZoneInfo("America/New_York")
+    meetings = (
+        (date(2026, 1, 28), "FOMC 利率决议"),
+        (date(2026, 3, 18), "FOMC 利率决议"),
+        (date(2026, 4, 29), "FOMC 利率决议"),
+        (date(2026, 6, 17), "FOMC 利率决议"),
+        (date(2026, 7, 29), "FOMC 利率决议"),
+        (date(2026, 9, 16), "FOMC 利率决议"),
+        (date(2026, 10, 27), "FOMC 会议（首日）"),
+        (date(2026, 10, 28), "FOMC 利率决议"),
+        (date(2026, 12, 9), "FOMC 利率决议"),
+    )
+    end = on + timedelta(days=horizon_days)
+    out: list[MacroEvent] = []
+    for day, name in meetings:
+        if not (on <= day <= end):
+            continue
+        out.append(
+            MacroEvent(
+                id=f"official-fomc-{day.isoformat()}",
+                event_type="FOMC",
+                name=name,
+                region="美国",
+                importance=5,
+                scheduled_at=datetime(day.year, day.month, day.day, 14, 0, tzinfo=et),
+                notes=["公开日程补充（美联储例会）"],
+            )
+        )
+    return out
+
+
 def _infer_event_type(name: str, region: str) -> str:
     text = f"{region} {name}"
     if "核心CPI" in text or "核心消费" in text:
@@ -230,12 +289,17 @@ def parse_ws_calendar_row(row, *, asof: date, index: int) -> MacroEvent | None:
     when = scheduled.date() if scheduled is not None else _parse_date(raw_time) or asof
     region = str(_pick_row(row, "地区", "国家", "region") or "").strip()
     etype = _infer_event_type(name, region)
+    importance = _importance(_pick_row(row, "重要性", "重要", "importance"))
+    if _is_conference_noise(name):
+        if etype == "OTHER":
+            etype = "CONFERENCE"
+        importance = min(importance, 2)
     ev = MacroEvent(
         id=f"ws-{when.isoformat()}-{index}-{etype}",
         event_type=etype,
         name=name[:80],
         region=region,
-        importance=_importance(_pick_row(row, "重要性", "重要", "importance")),
+        importance=importance,
         scheduled_at=scheduled,
         previous=_num_cell(_pick_row(row, "前值", "前", "previous")),
         consensus=_num_cell(_pick_row(row, "预期", "共识", "consensus")),
@@ -246,7 +310,7 @@ def parse_ws_calendar_row(row, *, asof: date, index: int) -> MacroEvent | None:
     return ev
 
 
-def live_calendar(on: date) -> tuple[list[MacroEvent], list[str]]:
+def live_calendar(on: date, horizon_days: int = 7) -> tuple[list[MacroEvent], list[str]]:
     """akshare 华尔街见闻日历（含前值/预期/今值）。金十/investing 能用则补。"""
     notes: list[str] = []
     events: list[MacroEvent] = []
@@ -255,14 +319,11 @@ def live_calendar(on: date) -> tuple[list[MacroEvent], list[str]]:
     try:
         import akshare as ak
     except ImportError:
-        return [], ["缺数据：未安装 akshare，跳过 live 宏观日历"]
-    days = [on]
-    try:
-        from datetime import timedelta
+        extra = official_core_events(on, horizon_days)
+        return extra, ["缺数据：未安装 akshare，跳过 live 宏观日历；已补公开核心日程"]
+    from datetime import timedelta
 
-        days.append(on + timedelta(days=1))
-    except Exception:
-        pass
+    days = [on + timedelta(days=i) for i in range(max(1, horizon_days) + 1)]
     for day in days:
         fn = getattr(ak, "macro_info_ws", None)
         if fn is None:
@@ -293,6 +354,13 @@ def live_calendar(on: date) -> tuple[list[MacroEvent], list[str]]:
         if df is None or getattr(df, "empty", True):
             continue
         notes.append(f"{fn_name} 返回 {len(df)} 行（已解析华尔街见闻为主）")
+    have_fomc = {e.scheduled_at.date() for e in events if e.event_type == "FOMC" and e.scheduled_at}
+    for ev in official_core_events(on, horizon_days):
+        meet_day = ev.scheduled_at.date() if ev.scheduled_at is not None else None
+        if meet_day is not None and meet_day in have_fomc:
+            continue
+        events.append(ev)
+        notes.append(f"公开日程补充：{ev.name} {meet_day}")
     return events, notes
 
 

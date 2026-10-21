@@ -157,10 +157,10 @@ def test_needs_retrain_monthly() -> None:
     assert needs_retrain({"status": "trained", "trained_on": "2026-09-30"}, date(2026, 10, 21))
     assert not needs_retrain({"status": "trained", "trained_on": "2026-10-01"}, date(2026, 10, 21))
     better = pick_better(
-        {"rank_ic": 0.02, "ic": 0.05, "icir": 0.4, "kind": "a"},
-        {"rank_ic": 0.04, "ic": 0.03, "icir": 0.2, "kind": "b"},
+        {"rank_ic": 0.02, "rank_icir": 0.4, "ic": 0.05, "kind": "a"},
+        {"rank_ic": 0.04, "rank_icir": 0.2, "ic": 0.03, "kind": "b"},
     )
-    assert better["kind"] == "b"
+    assert better["kind"] == "a"
 
 
 def test_run_daily_skips_weekend(tmp_path, examples_dir, monkeypatch) -> None:

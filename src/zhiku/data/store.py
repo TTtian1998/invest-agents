@@ -553,6 +553,56 @@ class MarketStore:
             "missing": int(missing),
         }
 
+    def last_bar(
+        self, symbol: str, adjust: str, *, before: date | None = None
+    ) -> dict[str, Any] | None:
+        q = "SELECT * FROM bars WHERE symbol=? AND adjust=?"
+        params: list[Any] = [symbol, adjust]
+        if before is not None:
+            q += " AND date<?"
+            params.append(_iso(before))
+        q += " ORDER BY date DESC LIMIT 1"
+        with _connect(self.sqlite_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(q, params).fetchone()
+        return dict(row) if row else None
+
+    def delete_bars(
+        self,
+        *,
+        symbol: str | None = None,
+        on: date | None = None,
+        adjust: str | None = None,
+    ) -> int:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if symbol:
+            clauses.append("symbol=?")
+            params.append(symbol)
+        if on is not None:
+            clauses.append("date=?")
+            params.append(_iso(on))
+        if adjust:
+            clauses.append("adjust=?")
+            params.append(adjust)
+        if not clauses:
+            return 0
+        with _connect(self.sqlite_path) as conn:
+            cur = conn.execute(f"DELETE FROM bars WHERE {' AND '.join(clauses)}", params)
+            return int(cur.rowcount)
+
+    def listing_name_map(self, market: str | None = "CN") -> dict[str, str]:
+        df = self.listings(market)
+        out: dict[str, str] = {}
+        if df.empty:
+            return out
+        for _, row in df.iterrows():
+            name = str(row.get("name") or "").strip()
+            symbol = str(row.get("symbol") or "").strip()
+            if name and symbol and name not in {"nan", "None"}:
+                out[name] = symbol
+        return out
+
     def export_parquet(self, adjust: str = "qfq") -> list[Path]:
         """有 pyarrow 时写成 parquet，否则写成 csv。失败不抛。"""
         df = self.bars(adjust=adjust)

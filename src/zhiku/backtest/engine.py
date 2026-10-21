@@ -27,6 +27,48 @@ def load_price_panel(path: Path) -> pd.DataFrame:
     return panel
 
 
+def sanitize_mixed_adjust(
+    qfq: pd.DataFrame,
+    none: pd.DataFrame | None = None,
+    *,
+    jump: float = 0.20,
+) -> pd.DataFrame:
+    """丢掉末日「前复权被不复权价覆盖」的跳变。|涨跌|>jump 且末日 qfq≈none 则置空。"""
+    if qfq is None or qfq.empty or len(qfq.index) < 2:
+        return qfq
+    panel = qfq.copy()
+    panel.index = pd.to_datetime(panel.index)
+    panel = panel.sort_index()
+    last = panel.index[-1]
+    prev = panel.index[-2]
+    none_p = None
+    if none is not None and not none.empty:
+        none_p = none.copy()
+        none_p.index = pd.to_datetime(none_p.index)
+    drop_cols: list[str] = []
+    for col in panel.columns:
+        p0, p1 = panel.loc[prev, col], panel.loc[last, col]
+        if pd.isna(p0) or pd.isna(p1) or float(p0) == 0:
+            continue
+        ret = float(p1) / float(p0) - 1.0
+        if abs(ret) <= jump:
+            continue
+        mixed = False
+        if none_p is not None and col in none_p.columns and last in none_p.index:
+            nv = none_p.loc[last, col]
+            if pd.notna(nv) and abs(float(p1) - float(nv)) / max(abs(float(nv)), 1e-9) < 0.02:
+                mixed = True
+        elif abs(ret) > jump:
+            mixed = True
+        if mixed:
+            drop_cols.append(col)
+    if drop_cols:
+        panel.loc[last, drop_cols] = pd.NA
+        if panel.loc[last].isna().all():
+            panel = panel.drop(index=last)
+    return panel
+
+
 def load_price_panel_from_store(store, symbols: list[str] | None = None, *, adjust: str = "qfq") -> pd.DataFrame:
     from zhiku.data.store import MarketStore
 
@@ -35,7 +77,132 @@ def load_price_panel_from_store(store, symbols: list[str] | None = None, *, adju
     df = store.bars(symbols, adjust=adjust)
     if df.empty:
         return pd.DataFrame()
-    return store.price_panel(list(df["symbol"].unique()), adjust=adjust, field="close")
+    panel = store.price_panel(list(df["symbol"].unique()), adjust=adjust, field="close")
+    if adjust == "qfq":
+        none = store.price_panel(list(df["symbol"].unique()), adjust="none", field="close")
+        panel = sanitize_mixed_adjust(panel, none)
+    return panel
+
+
+def _nav_metrics(nav: pd.Series, *, screen: str, settings: BacktestSettings) -> BacktestResult:
+    nav = nav.dropna().astype(float)
+    if nav.empty:
+        return BacktestResult(screen, None, None, None, None, None, notes=["缺净值"])
+    monthly = nav.resample("ME").last().dropna()
+    if monthly.empty:
+        monthly = nav.resample("M").last().dropna()
+    use = monthly if len(monthly) >= 2 else nav
+    periods = 12.0 if len(monthly) >= 2 else 252.0
+    return summarize_nav(use, rf=settings.rf, periods_per_year=periods, screen=screen)
+
+
+def compute_benchmarks(prices: pd.DataFrame, settings: BacktestSettings) -> dict[str, BacktestResult]:
+    """全池等权 + 沪深300/中证800（ETF 或指数代码）。成本为 0，作对照不做交易。"""
+    out: dict[str, BacktestResult] = {}
+    if prices is None or prices.empty:
+        return out
+    extras = set(settings.benchmark_symbols or [])
+    extras.add(settings.benchmark)
+    members = [c for c in prices.columns if c not in extras]
+    if len(members) >= 2:
+        nav, _ = monthly_equal_weight(prices, members, cost_bps=0, slippage_bps=0)
+        if not nav.empty:
+            out["universe_ew"] = summarize_nav(
+                nav, rf=settings.rf, periods_per_year=12.0, screen="universe_ew"
+            )
+    aliases = {
+        "csi300": ("510300", "000300"),
+        "csi800": ("000906",),
+    }
+    for name, symbols in aliases.items():
+        for sym in symbols:
+            if sym not in prices.columns:
+                continue
+            series = prices[sym].dropna()
+            if len(series) < 2:
+                continue
+            nav = series / float(series.iloc[0])
+            out[name] = _nav_metrics(nav, screen=name, settings=settings)
+            out[name].notes = [f"指数对照用 {sym}"]
+            break
+    return out
+
+
+def attach_benchmarks(
+    result: BacktestResult,
+    benches: dict[str, BacktestResult],
+    *,
+    sanity_max_ann_gap: float = 0.25,
+) -> BacktestResult:
+    payload = {k: v.to_dict() for k, v in benches.items()}
+    result.benchmarks = {
+        k: {
+            "annualized": v.get("annualized"),
+            "max_drawdown": v.get("max_drawdown"),
+            "sharpe": v.get("sharpe"),
+            "notes": v.get("notes"),
+        }
+        for k, v in payload.items()
+    }
+    primary = benches.get("csi300") or benches.get("csi800") or benches.get("universe_ew")
+    if primary is not None and result.annualized is not None and primary.annualized is not None:
+        result.benchmark_annualized = primary.annualized
+        result.excess_annualized = result.annualized - primary.annualized
+        result.beat_benchmark = result.annualized >= primary.annualized
+    ew = benches.get("universe_ew")
+    idx = benches.get("csi300") or benches.get("csi800")
+    if ew is not None and idx is not None and ew.annualized is not None and idx.annualized is not None:
+        gap = abs(ew.annualized - idx.annualized)
+        result.sanity_ok = gap <= sanity_max_ann_gap
+        result.sanity_note = (
+            f"全池等权年化 {ew.annualized:.2%} vs 指数 {idx.annualized:.2%}，差 {gap:.2%}"
+            + ("，超过阈值，回测数字不可信" if not result.sanity_ok else "")
+        )
+    return result
+
+
+def crosscheck_public_index(store, on: date | None = None) -> list[str]:
+    """用公开指数点位交叉核对本地 510300/000300。失败写缺数据，不编造。"""
+    notes: list[str] = []
+    local = None
+    for symbol, adjust in (("510300", "none"), ("510300", "qfq"), ("000300", "none"), ("000300", "qfq")):
+        bar = store.last_bar(symbol, adjust, before=None)
+        if bar and bar.get("close") is not None:
+            local = (symbol, adjust, float(bar["close"]), str(bar.get("date")))
+            break
+    if local is None:
+        notes.append("缺数据：本地无 510300/000300，无法与公开点位交叉核对")
+        return notes
+    try:
+        import yfinance as yf
+    except ImportError:
+        notes.append(f"本地 {local[0]} {local[2]:.4f}（{local[3]}），缺数据：未安装 yfinance 做公开核对")
+        return notes
+    public = None
+    for ticker in ("510300.SS", "000300.SS"):
+        try:
+            hist = yf.Ticker(ticker).history(period="10d")
+        except Exception as exc:  # noqa: BLE001
+            notes.append(f"公开点位 {ticker} 失败：{exc}")
+            continue
+        if hist is None or getattr(hist, "empty", True):
+            continue
+        close = hist["Close"].dropna()
+        if close.empty:
+            continue
+        public = (ticker, float(close.iloc[-1]), str(close.index[-1])[:10])
+        break
+    if public is None:
+        notes.append(f"本地 {local[0]} 收盘 {local[2]:.4f}（{local[3]}），缺数据：无公开指数点位")
+        return notes
+    gap = abs(local[2] - public[1]) / max(abs(public[1]), 1e-9)
+    notes.append(
+        f"交叉核对：本地 {local[0]}/{local[1]} {local[2]:.4f}（{local[3]}）"
+        f" vs 公开 {public[0]} {public[1]:.4f}（{public[2]}），相对差 {gap:.2%}"
+    )
+    if gap > 0.08 and local[0] != "000300":
+        notes.append("交叉核对偏离超过 8%，请检查复权或代码映射")
+    return notes
 
 
 def backtest_screen(
@@ -102,6 +269,8 @@ def backtest_screen(
         screen=screen,
         engine=engine,
     )
+    if result.annualized is not None and result.benchmark_annualized is not None:
+        result.excess_annualized = result.annualized - result.benchmark_annualized
     result.notes = gate_notes
     result.passed_gate = _gate(result, settings)
     return result

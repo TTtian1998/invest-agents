@@ -207,8 +207,12 @@ def test_spot_bars_only_update_existing(tmp_path: Path) -> None:
         only_existing=True,
     )
     assert n == 1
-    assert store.last_ok("bars:qfq", "600519") == date(2026, 10, 21)
+    assert store.last_ok("bars:none", "600519") == date(2026, 10, 21)
+    # 没有上一根 none/qfq，不得把原始收盘写进前复权，也不把 qfq 标成完成
+    assert store.last_ok("bars:qfq", "600519") == date(2026, 10, 20)
     assert store.last_ok("bars:qfq", "000001") is None
+    qfq = store.bars(["600519"], adjust="qfq")
+    assert qfq.empty or "2026-10-21" not in set(pd.to_datetime(qfq["date"]).dt.strftime("%Y-%m-%d"))
 
 
 def test_resume_skips_completed(tmp_path: Path) -> None:

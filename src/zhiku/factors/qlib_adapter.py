@@ -165,33 +165,84 @@ def needs_retrain(meta: dict[str, Any] | None, asof: date) -> bool:
 
 
 def _score_tuple(meta: dict[str, Any]) -> tuple[float, float, float]:
-    def _f(key: str) -> float:
-        v = meta.get(key)
-        try:
-            return float(v) if v is not None else float("-inf")
-        except (TypeError, ValueError):
-            return float("-inf")
+    def _f(*keys: str) -> float:
+        for key in keys:
+            v = meta.get(key)
+            try:
+                if v is not None:
+                    return float(v)
+            except (TypeError, ValueError):
+                continue
+        return float("-inf")
 
-    return (_f("rank_ic"), _f("ic"), _f("icir"))
+    # 滚动样本外：RankICIR（稳定）优先，再 RankIC 均值，IC 仅作备注
+    return (_f("rank_icir", "icir"), _f("rank_ic"), _f("ic"))
 
 
 def pick_better(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
-    """RankIC → IC → ICIR，取更好的。"""
+    """RankICIR → RankIC 均值 → IC。ICIR 0.00x 视为噪声，让位给更稳的模型。"""
     return a if _score_tuple(a) >= _score_tuple(b) else b
 
 
-def _icir(pred: pd.Series, label: pd.Series, dates: pd.Series) -> float | None:
+def _daily_rank_ic(pred: pd.Series, label: pd.Series, dates: pd.Series) -> pd.Series:
     frame = pd.DataFrame({"pred": pred, "label": label, "date": dates})
     frame = frame.replace([np.inf, -np.inf], np.nan).dropna()
     if frame.empty:
-        return None
-    daily = frame.groupby("date").apply(
-        lambda g: g["pred"].corr(g["label"], method="spearman") if len(g) >= 5 else np.nan
-    )
-    daily = daily.dropna()
-    if len(daily) < 3 or float(daily.std()) == 0:
-        return None
-    return float(daily.mean() / daily.std())
+        return pd.Series(dtype=float)
+    rows = []
+    for dt, g in frame.groupby("date"):
+        if len(g) < 5:
+            continue
+        val = g["pred"].corr(g["label"], method="spearman")
+        if val is not None and pd.notna(val):
+            rows.append((dt, float(val)))
+    if not rows:
+        return pd.Series(dtype=float)
+    return pd.Series({dt: v for dt, v in rows})
+
+
+def _rank_ic_stats(pred: pd.Series, label: pd.Series, dates: pd.Series) -> dict[str, Any]:
+    daily = _daily_rank_ic(pred, label, dates)
+    if daily.empty:
+        return {"rank_ic": None, "rank_icir": None, "icir": None, "n_oos_days": 0}
+    mean = float(daily.mean())
+    std = float(daily.std(ddof=0)) if len(daily) >= 2 else None
+    ir = (mean / std) if std and std != 0 else None
+    return {
+        "rank_ic": mean,
+        "rank_icir": ir,
+        "icir": ir,
+        "n_oos_days": int(len(daily)),
+    }
+
+
+def _icir(pred: pd.Series, label: pd.Series, dates: pd.Series) -> float | None:
+    return _rank_ic_stats(pred, label, dates).get("rank_icir")
+
+
+def _quintile_returns(pred: pd.Series, label: pd.Series, dates: pd.Series) -> dict[str, float]:
+    """样本外按日五分位，再对日均收益取平均。Q1=最低分，Q5=最高分。"""
+    frame = pd.DataFrame({"pred": pred, "label": label, "date": dates})
+    frame = frame.replace([np.inf, -np.inf], np.nan).dropna()
+    if frame.empty:
+        return {}
+    parts: list[pd.Series] = []
+    for _, g in frame.groupby("date"):
+        if len(g) < 10:
+            continue
+        ranks = g["pred"].rank(method="first")
+        try:
+            bucket = pd.qcut(ranks, 5, labels=["Q1", "Q2", "Q3", "Q4", "Q5"])
+        except ValueError:
+            continue
+        parts.append(g.groupby(bucket, observed=False)["label"].mean())
+    if not parts:
+        return {}
+    avg = pd.concat(parts, axis=1).mean(axis=1)
+    out = {str(k): float(v) for k, v in avg.items() if pd.notna(v)}
+    if "Q1" in out and "Q5" in out:
+        out["Q5_minus_Q1"] = out["Q5"] - out["Q1"]
+    return out
 
 
 def train_alpha158(qlib_dir: Path, model_path: Path) -> str:
@@ -285,15 +336,28 @@ def _train_qlib(qlib_dir: Path, model_path: Path) -> str:
         pickle.dump({"kind": "qlib_lgb", "model": model}, fh)
     pred = model.predict(dataset, segment="test")
     ic = rank_ic = icir = None
+    quintiles: dict[str, float] = {}
     try:
         label = dataset.prepare("test", col_set="label")
         aligned = pd.concat([pred, label], axis=1)
         aligned.columns = ["pred", "label"]
         ic = float(aligned["pred"].corr(aligned["label"]))
-        rank_ic = float(aligned["pred"].corr(aligned["label"], method="spearman"))
         dates = aligned.index.get_level_values(0) if hasattr(aligned.index, "get_level_values") else None
         if dates is not None:
-            icir = _icir(aligned["pred"].reset_index(drop=True), aligned["label"].reset_index(drop=True), pd.Series(dates))
+            stats = _rank_ic_stats(
+                aligned["pred"].reset_index(drop=True),
+                aligned["label"].reset_index(drop=True),
+                pd.Series(dates),
+            )
+            rank_ic = stats.get("rank_ic")
+            icir = stats.get("rank_icir")
+            quintiles = _quintile_returns(
+                aligned["pred"].reset_index(drop=True),
+                aligned["label"].reset_index(drop=True),
+                pd.Series(dates),
+            )
+        else:
+            rank_ic = float(aligned["pred"].corr(aligned["label"], method="spearman"))
     except Exception:  # noqa: BLE001
         pass
     meta = {
@@ -301,7 +365,10 @@ def _train_qlib(qlib_dir: Path, model_path: Path) -> str:
         "trained_on": now_shanghai().date().isoformat(),
         "ic": ic,
         "rank_ic": rank_ic,
+        "rank_icir": icir,
         "icir": icir,
+        "quintiles": quintiles,
+        "label": "qlib Alpha158 默认 Ref($close,-2)/Ref($close,-1)-1（T+1 收到 T+2 收，无当日收盘前视）",
         "path": str(model_path),
         "qlib_dir": str(qlib_dir),
         "status": "trained",
@@ -348,12 +415,16 @@ def _train_lgb_lite(
     booster = lgb.train(params, ds, num_boost_round=80)
     ic = rank_ic = None
     icir = None
+    quintiles: dict[str, float] = {}
     if not test.empty:
         pred = booster.predict(test[FEATURE_NAMES])
         y = test["label"].to_numpy()
         ic = float(pd.Series(pred).corr(pd.Series(y)))
-        rank_ic = float(pd.Series(pred).corr(pd.Series(y), method="spearman"))
-        icir = _icir(pd.Series(pred), test["label"].reset_index(drop=True), pd.Series(test.index.get_level_values("date")))
+        oos_dates = pd.Series(test.index.get_level_values("date"))
+        stats = _rank_ic_stats(pd.Series(pred), test["label"].reset_index(drop=True), oos_dates)
+        rank_ic = stats.get("rank_ic")
+        icir = stats.get("rank_icir")
+        quintiles = _quintile_returns(pd.Series(pred), test["label"].reset_index(drop=True), oos_dates)
     payload = {"kind": "lgb_lite", "model": booster, "features": FEATURE_NAMES}
     with model_path.open("wb") as fh:
         pickle.dump(payload, fh)
@@ -362,10 +433,14 @@ def _train_lgb_lite(
         "trained_on": now_shanghai().date().isoformat(),
         "ic": ic,
         "rank_ic": rank_ic,
+        "rank_icir": icir,
         "icir": icir,
+        "quintiles": quintiles,
+        "label": "T+1 开盘到 T+5 收盘（无当日收盘前视）",
         "n_samples": int(len(data)),
         "n_train": int(len(train)),
         "n_test": int(len(test)),
+        "n_oos_days": None,
         "path": str(model_path),
         "status": "trained",
         "features": FEATURE_NAMES,
@@ -380,7 +455,7 @@ def train_and_select(
     start: date | None = None,
     end: date | None = None,
 ) -> dict[str, Any]:
-    """训练 lgb_lite，尝试 Alpha158；按 RankIC/IC/ICIR 选默认。"""
+    """训练 lgb_lite，尝试 Alpha158；按 RankICIR → RankIC 均值选默认。"""
     models_dir = Path(models_dir)
     models_dir.mkdir(parents=True, exist_ok=True)
     lite_path = models_dir / "lgb_lite.pkl"
@@ -388,7 +463,10 @@ def train_and_select(
     comparison: dict[str, Any] = {"notes": []}
     lite_meta = _train_lgb_lite(store, lite_path, start=start, end=end)
     _write_meta(lite_path, lite_meta)
-    comparison["lgb_lite"] = {k: lite_meta.get(k) for k in ("kind", "ic", "rank_ic", "icir", "n_samples", "trained_on")}
+    comparison["lgb_lite"] = {
+        k: lite_meta.get(k)
+        for k in ("kind", "ic", "rank_ic", "rank_icir", "icir", "quintiles", "label", "n_samples", "trained_on")
+    }
     qlib_meta: dict[str, Any] | None = None
     if qlib_available():
         try:
@@ -401,7 +479,8 @@ def train_and_select(
         comparison["notes"].append("未安装 pyqlib，默认 lgb_lite")
     if qlib_meta:
         comparison["qlib_alpha158"] = {
-            k: qlib_meta.get(k) for k in ("kind", "ic", "rank_ic", "icir", "trained_on")
+            k: qlib_meta.get(k)
+            for k in ("kind", "ic", "rank_ic", "rank_icir", "icir", "quintiles", "label", "trained_on")
         }
         winner = pick_better(qlib_meta, lite_meta)
     else:

@@ -104,7 +104,7 @@ zk data sync --universe csi800 --years 3 --workers 4
 # 全市场：zk data sync --universe all --years 3
 # 中断后续传：同一 ZHIKU_KB 再跑（默认 --resume）；挂死标的记 missing，不插值
 zk factor prepare
-zk factor train          # 对比 lgb_lite 与 Alpha158，按 RankIC/IC/ICIR 选默认；按月重训
+zk factor train          # 对比 lgb_lite 与 Alpha158，按 RankICIR→RankIC 均值选默认；按月重训
 zk --provider live daily --date 2026-10-21
 # 交易日 cron（Asia/Shanghai 15:30）：
 # 30 15 * * 1-5 TZ=Asia/Shanghai ZHIKU_KB=/path/to/kb zk --provider live run-daily
@@ -113,9 +113,11 @@ zk --provider live daily --date 2026-10-21
 - A 股：列表（含 ST、停牌、上市/退市日）、指数成分、前复权+不复权日线、东财整表 + **新浪三大表明细**（营业利润/流动资产负债/固定资产，公告日 PIT）、整表分红（股息率用「每10股派息/收盘」或官方股息率，不再把派息当市值比）。
 - 港美：`--include-global` 时按配置拉恒生、恒生科技、标普500、纳指100。
 - 主源 akshare，日线备用 baostock 子进程 / tushare（`TUSHARE_TOKEN`）。FRED / X 无 token 就跳过并标注。
-- live 新闻/宏观**不混入**离线样本；宏观日历解析前值/预期/今值。
+- live 新闻/宏观**不混入**离线样本；缺真实数据写「缺数据」，利率/地缘/应急冲击不回落 fixture。
+- 宏观事件窗口只给核心数据与央行（可配白名单）；会议/展会重要度封顶且不建窗口。公开日程补未来 7 天 FOMC。
 - 经典公式（Greenblatt / Piotroski / 分红）只用可交易过滤，不套 ROE/PE 质量门槛；门槛可配。
-- live 回测用本地库历史价，加交易成本，涨停不可买入、跌停不可卖出。
+- live 回测用本地库前复权；增量截面只写不复权，前复权按涨跌平移。对照全池等权/沪深300/中证800，输出超额；等权与指数年化差过大则报错。
+- 未过闸公式分不计入总分，只在单票详情展示。应急必须有 VIX/指数价格确认，摘要写触发原因。
 
 **本仓库云主机实测（中证800，近 3 年，跳过港美）：**
 
@@ -123,9 +125,9 @@ zk --provider live daily --date 2026-10-21
 | --- | --- | --- |
 | 首次 `zk data sync --universe csi800 --years 3 --workers 4 --skip-global` | 约 40–70 分钟 | 成分 800，qfq ≈798/801 |
 | 新浪明细财务（CSI800） | 约 25 分钟 | ebit 覆盖约 710/800，流动资产约 634/800 |
-| `zk data sync --incremental`（已同步池） | **1.5s** | 截面写当日日线，不逐只 hist |
-| `zk factor train` | ~40s | lgb_lite IC 0.051 RankIC 0.026；Alpha158 IC 0.007 RankIC 0.025 ICIR 0.183；默认 lgb_lite |
-| `zk --provider live daily --date 2026-10-21` | ~110–120s | 池 801，缺数据 0.8%；三经典公式各 30 只；新闻 132；日历 64 |
+| `zk data sync --incremental`（已同步池） | **1.5s** | 截面只写不复权；前复权按涨跌平移，禁止把原始价写入 qfq |
+| `zk factor train` | ~40s | 按 RankICIR→RankIC 均值选默认；报告两模型五分位。旧口径曾误选 lgb_lite（ICIR 0.004） |
+| `zk --provider live daily --date 2026-10-21` | 正确性校验后重跑 | 见 `/opt/cursor/artifacts/zhiku-live-2026-10-21/`（不进 git）；旧摘要数字因 qfq 混入不可信 |
 
 A 股全市场（`--universe all --resume`）本机未跑完：约 17%（~3000/17442）时预计全量再 2.5–3 小时。每日增量对已入库标的应在 10 分钟内（实测 CSI800 1.5s）。东财 hist 会熔断改 baostock。
 
@@ -181,11 +183,11 @@ A 股全市场（`--universe all --resume`）本机未跑完：约 17%（~3000/1
 
 ### 事件驱动层
 
-打分由**预期差**驱动（一致预期 / 标准化 surprise / 美股隐含涨跌幅），不是消息「好坏」。缺预期写「缺数据」。每条记录 `first_seen` 与新颖度、发布时段（盘前/盘中/盘后/隔夜）和 A 股 T+1 最早可执行时点；超过半衰期标「已过时」。拥挤度综合融资、北向、主力、龙虎榜、换手，以及美股 put/call、做空、零售热度；拥挤时好消息标「利好出尽风险」。产业链 YAML 与地缘传导合并，事件打出一阶/二阶受影响方向。每个机会必带 `invalidation` 与 `time_stop`，到期触发线提示「未兑现，撤」，回测用同一时间止损。日历外冲击（VIX、指数盘中跌幅、多源冲突/制裁关键词）进入应急模式：先降风险、不抄底、等官方表态。判断写入只追加的 `journal/decisions.jsonl`。回测财务按**公告日**对齐，处理退市幸存者偏差，并有前视偏差测试。
+打分由**预期差**驱动（一致预期 / 标准化 surprise / 美股隐含涨跌幅），不是消息「好坏」。缺预期写「缺数据」。每条记录 `first_seen` 与新颖度、发布时段（盘前/盘中/盘后/隔夜）和 A 股 T+1 最早可执行时点；超过半衰期标「已过时」。拥挤度综合融资、北向、主力、龙虎榜、换手，以及美股 put/call、做空、零售热度；拥挤时好消息标「利好出尽风险」。产业链 YAML 与地缘传导合并，事件打出一阶/二阶受影响方向。每个机会必带 `invalidation` 与 `time_stop`，到期触发线提示「未兑现，撤」，回测用同一时间止损。日历外冲击必须有价格确认（VIX、指数跌幅）才进入应急；关键词单独不触发，摘要写出指标与阈值。判断写入只追加的 `journal/decisions.jsonl`。回测财务按**公告日**对齐，处理退市幸存者偏差，并有前视偏差测试。
 
 ## 宏观锚点
 
-`zk macro` 与每日报告顶部「宏观锚点」：未来 7 天核心日历（Asia/Shanghai，标出影响 A/H/美哪个时段）、昨日预期差与锚定资产反应、利率预期（FedWatch 不可用时用联邦基金期货**近似**并注明）、地缘温度（GPR fixture；GDELT 可选）、事件剧本（偏鹰/符合/偏鸽）和对持仓行业暴露（只读仓库外私有文件的**代码与行业**，没有则跳过，绝不打印数量/成本）。
+`zk macro` 与每日报告顶部「宏观锚点」：未来 7 天**核心**日历（美国非农/CPI/PCE/FOMC、中国 CPI/PPI/GDP/社融/LPR、各大央行；会议/展会不建窗口）。live 利率无期货则写「缺数据」，不回落 fixture。事件剧本（偏鹰/符合/偏鸽）和对持仓行业暴露（只读仓库外私有文件的**代码与行业**，没有则跳过，绝不打印数量/成本）。
 
 重大事件前后生成事件窗口，触发线与多空机会提示「新开仓降仓位/止损放宽或等落地」；`macro.freeze_adds_in_window` 可配窗口内禁加。
 

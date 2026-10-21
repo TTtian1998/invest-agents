@@ -51,7 +51,9 @@ class MacroBundle:
         return json.dumps(self.__dict__, ensure_ascii=False, indent=2, default=str)
 
 
-def _holdings_fundamentals(paths: Paths, asof: date) -> list[Fundamentals] | None:
+def _holdings_fundamentals(
+    paths: Paths, asof: date, *, provider_kind: str = "fixture"
+) -> list[Fundamentals] | None:
     if not paths.positions.is_file():
         return None
     try:
@@ -59,6 +61,8 @@ def _holdings_fundamentals(paths: Paths, asof: date) -> list[Fundamentals] | Non
     except RulesSchemaError:
         return None
     symbols = {p.symbol for p in port.positions}
+    if provider_kind == "live":
+        return [Fundamentals(symbol=p.symbol, name=p.name, market=p.market) for p in port.positions]
     all_rows = load_asof_universe(
         fundamentals_path=paths.fixtures / "fundamentals.yaml",
         pit_path=paths.fixtures / "pit_fundamentals.yaml",
@@ -116,7 +120,7 @@ def run_macro(
     cal_path = paths.fixtures / "macro_calendar.yaml"
     events: list = []
     if provider_kind == "live" and settings.macro.enabled:
-        live_events, live_notes = live_calendar(on)
+        live_events, live_notes = live_calendar(on, horizon_days=settings.macro.horizon_days)
         notes.extend(live_notes)
         events.extend(live_events)
         if live_events:
@@ -142,8 +146,12 @@ def run_macro(
     future = upcoming(events, asof_dt, days=horizon)
     released = released_on_or_before(events, asof_dt, lookback_days=1)
 
-    history = load_history(paths.fixtures / "macro_history.yaml")
-    holdings = _holdings_fundamentals(paths, on)
+    if provider_kind == "live":
+        history = []
+        notes.append("live 宏观历史样本：缺数据，不回落 fixture。")
+    else:
+        history = load_history(paths.fixtures / "macro_history.yaml")
+    holdings = _holdings_fundamentals(paths, on, provider_kind=provider_kind)
     if holdings is None:
         notes.append("未找到私有持仓文件，事件剧本不输出持仓暴露。")
     scripts = build_scripts(future, history, holdings)
@@ -157,20 +165,34 @@ def run_macro(
     banners = window_banner(windows, on)
     freeze = any(w.freeze_adds for w in active)
 
-    fed_raw = load_yaml(paths.fixtures / "fedwatch.yaml")
-    rate = from_fixture(fed_raw)
-    if provider_kind == "live" and settings.macro.fedwatch_approx:
-        live_rate = live_fedwatch_approx(on)
-        if isinstance(live_rate, MissingData):
-            notes.append(f"利率期货：{live_rate.reason}")
-        else:
-            rate = live_rate
+    if provider_kind == "live":
+        from zhiku.macro.models import RateExpectation
 
-    if provider_kind == "live" and live_anchor_rows:
+        if settings.macro.fedwatch_approx:
+            live_rate = live_fedwatch_approx(on, require_env=False)
+            if isinstance(live_rate, MissingData):
+                notes.append(f"利率期货：{live_rate.reason}")
+                rate = RateExpectation(source="缺数据", note=live_rate.reason)
+            else:
+                rate = live_rate
+        else:
+            rate = RateExpectation(source="缺数据", note="未开启利率近似")
+        notes.append(f"利率来源：{rate.source}")
+    else:
+        fed_raw = load_yaml(paths.fixtures / "fedwatch.yaml")
+        rate = from_fixture(fed_raw)
+
+    if provider_kind == "live":
         anchors = live_anchor_rows
+        if not anchors:
+            notes.append("缺数据：锚定资产无真实行情。")
+        from zhiku.macro.models import GeoHeat
+
+        geo = GeoHeat(missing="缺数据：live 不使用地缘 fixture", temperature="缺数据")
+        notes.append("地缘风险：缺数据（live 不回落 geopolitical.yaml）")
     else:
         anchors = snapshots_from_raw(load_yaml(paths.fixtures / "anchor_prices.yaml"))
-    geo = load_geo(paths.fixtures / "geopolitical.yaml")
+        geo = load_geo(paths.fixtures / "geopolitical.yaml")
     chains = load_chains(paths.kb / "config" / "chains.yaml")
     fired: list[dict] = []
     texts: list[str] = [e.headline for e in geo.recent_events]

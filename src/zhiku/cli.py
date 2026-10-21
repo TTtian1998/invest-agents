@@ -290,9 +290,9 @@ def review_cmd(
         macro = run_macro(paths, end, provider_kind=ctx.obj["provider_kind"])
         script_hits = macro.script_hits
         news = run_news(paths, end, provider_kind=ctx.obj["provider_kind"], macro_bundle=macro)
-        source_hits = news.source_hits or source_hitrate(
-            load_followups(paths.fixtures / "news.yaml")
-        )
+        source_hits = news.source_hits or {}
+        if ctx.obj["provider_kind"] != "live" and not source_hits:
+            source_hits = source_hitrate(load_followups(paths.fixtures / "news.yaml"))
         x_hits = news.x_hits or {}
         crowding_stats = news.crowding_stats or {}
     except Exception:  # noqa: BLE001

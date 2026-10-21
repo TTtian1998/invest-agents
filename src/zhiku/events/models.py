@@ -96,6 +96,9 @@ class Emergency(BaseModel):
     affected: list[str] = Field(default_factory=list)
     hedges: list[str] = Field(default_factory=list)
     freeze_adds: bool = False
+    price_confirmed: bool = False
+    keyword_hits: list[str] = Field(default_factory=list)
+    metrics: dict = Field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return self.model_dump(mode="json")

@@ -232,6 +232,60 @@ def _sync_cn_meta(
         report.spot_rows = spot
 
 
+def _spot_none_row(symbol: str, on: date, r: dict, close: float) -> dict:
+    return {
+        "symbol": symbol,
+        "market": "CN",
+        "date": on,
+        "adjust": "none",
+        "open": r.get("open") or close,
+        "high": r.get("high") or close,
+        "low": r.get("low") or close,
+        "close": close,
+        "volume": r.get("volume"),
+        "amount": r.get("amount"),
+        "turnover": None,
+        "pct_chg": r.get("pct_chg"),
+        "limit_up": None,
+        "limit_down": None,
+    }
+
+
+def _scaled_qfq_row(store: MarketStore, symbol: str, on: date, r: dict, none_close: float) -> dict | None:
+    """用当日不复权涨跌把上一根前复权平移过来，绝不把原始收盘直接写入 qfq。"""
+    prev_qfq = store.last_bar(symbol, "qfq", before=on)
+    prev_none = store.last_bar(symbol, "none", before=on)
+    if not prev_qfq or not prev_none:
+        return None
+    pq = prev_qfq.get("close")
+    pn = prev_none.get("close")
+    if pq is None or pn is None or float(pn) == 0:
+        return None
+    scale = float(none_close) / float(pn)
+
+    def _sc(value) -> float:
+        if value is None:
+            return float(pq) * scale
+        return float(value) * scale
+
+    return {
+        "symbol": symbol,
+        "market": "CN",
+        "date": on,
+        "adjust": "qfq",
+        "open": _sc(r.get("open")),
+        "high": _sc(r.get("high")),
+        "low": _sc(r.get("low")),
+        "close": float(pq) * scale,
+        "volume": r.get("volume"),
+        "amount": r.get("amount"),
+        "turnover": None,
+        "pct_chg": r.get("pct_chg"),
+        "limit_up": None,
+        "limit_down": None,
+    }
+
+
 def _upsert_spot_as_bars(
     store: MarketStore,
     spot: list[dict],
@@ -240,10 +294,11 @@ def _upsert_spot_as_bars(
     symbols: list[str] | None = None,
     only_existing: bool = True,
 ) -> int:
-    """把当日东财截面写成一根日线。只更新已有历史的标的，避免把未拉满的新票标成完成。"""
+    """把当日东财截面写成不复权日线；前复权只按涨跌平移，不混入原始价。"""
     wanted = set(symbols) if symbols else None
     rows = []
-    seen: list[str] = []
+    seen_none: list[str] = []
+    seen_qfq: list[str] = []
     for r in spot:
         symbol = r["symbol"]
         if wanted is not None and symbol not in wanted:
@@ -254,35 +309,66 @@ def _upsert_spot_as_bars(
         if only_existing:
             if store.last_ok("bars:qfq", symbol) is None and store.last_ok("bars:none", symbol) is None:
                 continue
-        for adjust in ("qfq", "none"):
-            rows.append(
-                {
-                    "symbol": symbol,
-                    "market": "CN",
-                    "date": on,
-                    "adjust": adjust,
-                    "open": r.get("open") or close,
-                    "high": r.get("high") or close,
-                    "low": r.get("low") or close,
-                    "close": close,
-                    "volume": r.get("volume"),
-                    "amount": r.get("amount"),
-                    "turnover": None,
-                    "pct_chg": r.get("pct_chg"),
-                    "limit_up": None,
-                    "limit_down": None,
-                }
-            )
-        seen.append(symbol)
+        rows.append(_spot_none_row(symbol, on, r, float(close)))
+        seen_none.append(symbol)
+        qfq_row = _scaled_qfq_row(store, symbol, on, r, float(close))
+        if qfq_row is not None:
+            rows.append(qfq_row)
+            seen_qfq.append(symbol)
     if not rows:
         return 0
     import pandas as pd
 
     store.upsert_bars(pd.DataFrame(rows))
-    for symbol in seen:
-        store.set_state("bars:qfq", symbol, last_ok=on, status="ok")
+    for symbol in seen_none:
         store.set_state("bars:none", symbol, last_ok=on, status="ok")
-    return len(seen)
+    for symbol in seen_qfq:
+        store.set_state("bars:qfq", symbol, last_ok=on, status="ok")
+    return len(seen_none)
+
+
+def repair_mixed_qfq(store: MarketStore, *, jump: float = 0.20) -> int:
+    """删除把不复权价写进前复权的末日 K 线，并把 last_ok 回退到上一根。"""
+    import pandas as pd
+
+    qfq = store.bars(adjust="qfq")
+    none = store.bars(adjust="none")
+    if qfq.empty:
+        return 0
+    none_close = {}
+    if not none.empty:
+        none = none.copy()
+        none["date"] = pd.to_datetime(none["date"])
+        for _, row in none.iterrows():
+            none_close[(str(row["symbol"]), pd.Timestamp(row["date"]).date())] = row.get("close")
+    qfq = qfq.copy()
+    qfq["date"] = pd.to_datetime(qfq["date"])
+    deleted = 0
+
+    for symbol, part in qfq.groupby("symbol"):
+        part = part.sort_values("date")
+        if len(part) < 2:
+            continue
+        last = part.iloc[-1]
+        prev = part.iloc[-2]
+        p0, p1 = prev.get("close"), last.get("close")
+        if p0 is None or p1 is None or float(p0) == 0:
+            continue
+        ret = float(p1) / float(p0) - 1.0
+        if abs(ret) <= jump:
+            continue
+        last_d = pd.Timestamp(last["date"]).date()
+        nv = none_close.get((str(symbol), last_d))
+        mixed = False
+        if nv is not None and abs(float(p1) - float(nv)) / max(abs(float(nv)), 1e-9) < 0.02:
+            mixed = True
+        if not mixed:
+            continue
+        store.delete_bars(symbol=str(symbol), on=last_d, adjust="qfq")
+        prev_d = pd.Timestamp(prev["date"]).date()
+        store.set_state("bars:qfq", str(symbol), last_ok=prev_d, status="ok")
+        deleted += 1
+    return deleted
 
 
 def _resolve_cn_symbols(store: MarketStore, universe: str, extra: list[str] | None) -> list[str]:

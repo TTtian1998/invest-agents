@@ -60,6 +60,8 @@ backtest:
   slippage_bps: 5
   rf: 0.02
   benchmark: "510300"
+  benchmark_symbols: ["510300", "000300", "000906"]
+  sanity_max_ann_gap: 0.25
   min_sharpe: 0.0            # 示例数据较短，默认不因夏普挡掉公式
   require_beat_benchmark: false
   top_n: 3
@@ -132,6 +134,31 @@ macro:
   gdelt_enabled: false
   fedwatch_approx: true
   horizon_days: 7
+  window_event_types:
+    - US_NFP
+    - US_UNEMP
+    - US_CPI
+    - US_CORE_CPI
+    - US_PCE
+    - US_PPI
+    - US_GDP
+    - US_RETAIL
+    - US_ISM_MFG
+    - FOMC
+    - FOMC_DOTS
+    - ECB
+    - BOJ
+    - BOE
+    - PBOC
+    - CN_CPI
+    - CN_PPI
+    - CN_GDP
+    - CN_SF
+    - CN_LPR
+    - CN_M2
+    - CN_PMI
+    - CN_RRR
+    - CN_RATE
   windows:
     FOMC: {before: 1, after: 1}
     US_NFP: {before: 1, after: 1}
@@ -148,7 +175,7 @@ data:
   include_global: true
   hk_lists: [hsi, hstech]
   us_lists: [sp500, ndx]
-  extra_symbols: ["510300"]   # 沪深300ETF，回测基准；不含持仓信息
+  extra_symbols: ["510300", "000300", "000906"]   # 沪深300ETF/指数、中证800；回测基准，不含持仓
   incremental_lookback_days: 2
   detail_financials: true
 
@@ -159,6 +186,7 @@ events:
   vix_spike: 0.20
   index_intraday_drop: 0.03
   emergency_min_sources: 2
+  require_price_confirm: true
   freeze_adds_on_emergency: true
   alert_on_emergency: true
   stale_after_halflives: 1.0

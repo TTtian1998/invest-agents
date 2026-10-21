@@ -51,9 +51,9 @@ def approximate_from_futures(
     )
 
 
-def live_fedwatch_approx(on: date) -> RateExpectation | MissingData:
-    """可选联网。失败返回 MissingData，调用方写「缺数据」。"""
-    if os.environ.get("ZHIKU_MACRO_LIVE", "").lower() not in {"1", "true", "yes"}:
+def live_fedwatch_approx(on: date, *, require_env: bool = True) -> RateExpectation | MissingData:
+    """可选联网。失败返回 MissingData，调用方写「缺数据」。live 路径传 require_env=False。"""
+    if require_env and os.environ.get("ZHIKU_MACRO_LIVE", "").lower() not in {"1", "true", "yes"}:
         return MissingData("未开启 ZHIKU_MACRO_LIVE，跳过联邦基金期货")
     try:
         import yfinance as yf
@@ -70,7 +70,14 @@ def live_fedwatch_approx(on: date) -> RateExpectation | MissingData:
     current = os.environ.get("ZHIKU_EFFR")
     current_rate = float(current) if current else None
     if current_rate is None:
-        return MissingData("未配置 ZHIKU_EFFR（当前有效联邦基金利率），不编造")
+        implied = 100.0 - close
+        return RateExpectation(
+            meeting=f"{on.isoformat()} 下次 FOMC",
+            asof=on.isoformat(),
+            implied_rate=round(implied, 4),
+            source="yfinance 联邦基金期货近似（非 CME FedWatch 官方）",
+            note="缺数据：未配置 ZHIKU_EFFR，无法映射加/降息概率",
+        )
     return approximate_from_futures(
         close, current_rate, meeting=f"{on.isoformat()} 下次 FOMC", asof=on.isoformat()
     )

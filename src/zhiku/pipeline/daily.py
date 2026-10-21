@@ -7,7 +7,14 @@ from dataclasses import asdict, dataclass, field
 from datetime import date
 from pathlib import Path
 
-from zhiku.backtest.engine import backtest_screen, load_price_panel, load_price_panel_from_store
+from zhiku.backtest.engine import (
+    attach_benchmarks,
+    backtest_screen,
+    compute_benchmarks,
+    crosscheck_public_index,
+    load_price_panel,
+    load_price_panel_from_store,
+)
 from zhiku.config import Paths
 from zhiku.events.pit import drop_survivors, load_delist_map
 from zhiku.factors.merge import merge_scores
@@ -17,7 +24,7 @@ from zhiku.pipeline.settings import load_pipeline_settings
 from zhiku.pipeline.universe import fundamentals_path, load_pipeline_universe
 from zhiku.review.audit import audit_top
 from zhiku.screens.fundamentals import Fundamentals, by_symbol
-from zhiku.screens.runner import ScreenBundle, formula_scores, run_screens
+from zhiku.screens.runner import ScreenBundle, average_formula_score, formula_scores, run_screens
 
 
 @dataclass
@@ -86,6 +93,13 @@ def run_daily(
 
     result = DailyResult(asof=on.isoformat(), fictional=provider_kind != "live")
     result.universe_size = len(rows)
+    cmp_path = paths.models_dir / "comparison.json"
+    if cmp_path.is_file():
+        try:
+            qlib_meta = dict(qlib_meta)
+            qlib_meta["comparison"] = json.loads(cmp_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pass
     result.qlib = qlib_meta
     result.quality_passed = bundle.quality_passed
     result.quality_rejected = [
@@ -99,15 +113,24 @@ def run_daily(
 
     prices = None
     limit_up = limit_down = None
+    live_prices: dict[str, float] = {}
     if provider_kind == "live" and store is not None and not store.is_empty():
-        prices = load_price_panel_from_store(store, [r.symbol for r in rows] + [settings.backtest.benchmark])
+        bench_syms = list(dict.fromkeys(
+            [settings.backtest.benchmark, *list(settings.backtest.benchmark_symbols or [])]
+        ))
+        prices = load_price_panel_from_store(store, [r.symbol for r in rows] + bench_syms)
         limit_up, limit_down = store.limit_panels(list(prices.columns) if not prices.empty else [])
         if delist and prices is not None and not prices.empty:
             prices = drop_survivors(prices, delist, on)
-            notes.append("价格面板来自本地库（前复权），已按退市日截断。")
+            notes.append("价格面板来自本地库（前复权），已按退市日截断；末日复权混入已清洗。")
         if prices is None or prices.empty:
             notes.append("本地库缺日线，跳过回测闸门。请先 zk data sync。")
             prices = None
+        notes.extend(crosscheck_public_index(store, on))
+        for r in rows:
+            bar = store.last_bar(r.symbol, "none") or store.last_bar(r.symbol, "qfq")
+            if bar and bar.get("close") is not None:
+                live_prices[r.symbol] = float(bar["close"])
     else:
         if not delist:
             delist = load_delist_map(paths.fixtures / "delisted.yaml")
@@ -121,7 +144,21 @@ def run_daily(
     active_screens = dict(bundle.screens)
     gated: list[str] = []
     backtests: dict[str, dict] = {}
+    benches: dict = {}
     if prices is not None:
+        benches = compute_benchmarks(prices, settings.backtest)
+        for bname, bres in benches.items():
+            backtests[bname] = bres.to_dict()
+        if benches.get("universe_ew") and (benches.get("csi300") or benches.get("csi800")):
+            probe = attach_benchmarks(
+                benches["universe_ew"],
+                benches,
+                sanity_max_ann_gap=settings.backtest.sanity_max_ann_gap,
+            )
+            if probe.sanity_note:
+                notes.append(probe.sanity_note)
+            if probe.sanity_ok is False:
+                notes.append("合理性断言失败：全池等权与指数年化差超过阈值，回测数字不可信。")
         for name, srows in bundle.screens.items():
             picks = [r.symbol for r in srows[: settings.backtest.top_n]]
             bt = backtest_screen(
@@ -134,10 +171,11 @@ def run_daily(
                 limit_up=limit_up,
                 limit_down=limit_down,
             )
+            attach_benchmarks(bt, benches, sanity_max_ann_gap=settings.backtest.sanity_max_ann_gap)
             backtests[name] = bt.to_dict()
             if not bt.passed_gate:
                 gated.append(name)
-                notes.append(f"公式 {name} 回测未达标，不进入每日候选。")
+                notes.append(f"公式 {name} 回测未达标，公式分不计入总分，仅单票详情展示。")
         for name in gated:
             active_screens.pop(name, None)
     else:
@@ -146,16 +184,18 @@ def run_daily(
         else:
             notes.append("缺 monthly_prices.csv，跳过回测闸门。")
 
-    formula = formula_scores(
+    formula_all = formula_scores(
         ScreenBundle(bundle.universe_size, bundle.quality_passed, bundle.quality, bundle.screens)
     )
-    # 过闸公式参与默认排序权重；未过闸仍保留分项，避免候选只剩量化分
     merge_formula = formula_scores(
         ScreenBundle(bundle.universe_size, bundle.quality_passed, bundle.quality, active_screens)
     )
-    if not merge_formula and formula:
-        merge_formula = formula
-        notes.append("全部公式回测未过闸，候选仍展示公式分，但不当作过闸信号。")
+    if gated:
+        notes.append("未过闸公式分不计入总分，只在单票详情（screens_all）展示。")
+    if not merge_formula and qlib_scores:
+        notes.append("全部公式回测未过闸，总分仅用量化分。")
+    elif not merge_formula and not qlib_scores:
+        notes.append("全部公式回测未过闸且无量化分，候选为空。")
     merged = merge_scores(names, merge_formula, qlib_scores, settings.merge)
     result.screens = {
         name: [
@@ -171,9 +211,11 @@ def run_daily(
             "symbol": c.symbol,
             "name": c.name,
             "formula_score": c.formula_score,
+            "formula_score_all": average_formula_score(formula_all.get(c.symbol, {})),
             "qlib_score": c.qlib_score,
             "total": c.total,
             "screens": c.screens,
+            "screens_all": formula_all.get(c.symbol, {}),
             "source": c.source,
         }
         for c in merged
@@ -193,6 +235,7 @@ def run_daily(
 
     formula_map = {c.symbol: c.screens for c in merged}
     macro = run_macro(paths, on, provider_kind=provider_kind, settings=settings)
+    name_map = {r.name: r.symbol for r in rows if r.name}
     news = run_news(
         paths,
         on,
@@ -202,6 +245,9 @@ def run_daily(
         quality_passed=set(bundle.quality_passed),
         settings=settings,
         macro_bundle=macro,
+        funds=rows if provider_kind == "live" else None,
+        prices=live_prices if provider_kind == "live" else None,
+        name_map=name_map if provider_kind == "live" else None,
     )
     result.macro = json.loads(macro.to_json())
     result.news = json.loads(news.to_json())
