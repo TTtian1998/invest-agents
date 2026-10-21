@@ -23,6 +23,8 @@ from zhiku.factors.dataset import (
 from zhiku.factors.experiment import (
     BASELINE,
     CANDIDATES,
+    LOCKED_ZSCORE,
+    ROUND2,
     ExperimentResult,
     changed_fields,
     decide_keep,
@@ -168,6 +170,13 @@ def test_candidates_change_one_variable() -> None:
         else:
             assert len(delta) == 1, (cfg.name, delta)
         parents[cfg.name] = cfg
+
+
+def test_round2_changes_one_variable_vs_locked_zscore() -> None:
+    for cfg in ROUND2:
+        delta = changed_fields(LOCKED_ZSCORE, cfg)
+        assert len(delta) == 1, (cfg.name, delta)
+        assert cfg.versus == "model_zscore"
 
 
 def test_run_one_valid_only_leaves_test_empty(tmp_path) -> None:

@@ -33,9 +33,9 @@
 ## 公式回测闸门与基准
 {% set pit = daily.pit_universe or {} %}
 股票池：{{ pit.label or "未标时点池" }}（{{ pit.kind or "unknown" }}）
-闸门：对同池等权超额必须 > 0，且 Sharpe 不低于等权。
+闸门：对照行是 T+1 开盘同池等权（不是月末收盘等权）。覆盖月数≥80% 后才看超额>0、Sharpe≥等权、半段都>0。今日静态名单已作废（前视）。
 {% for name, bt in (daily.backtests or {}).items() %}
-- {{ name }} 年化={{ bt.annualized }} 回撤={{ bt.max_drawdown }} Sharpe={{ bt.sharpe }} 对同池超额={{ bt.excess_annualized }} {{ "过闸" if bt.passed_gate else "对照/未过闸" }}
+- {{ name }} 年化={{ bt.annualized }} 回撤={{ bt.max_drawdown }} Sharpe={{ bt.sharpe }} 对同池超额={{ bt.excess_annualized }} 覆盖={{ bt.coverage_ratio }} {{ bt.gate_status or ("过闸" if bt.passed_gate else "对照/未过闸") }}
 {% endfor %}
 {% set q = daily.qlib or {} %}
 {% set mw = daily.merge_weights or {} %}

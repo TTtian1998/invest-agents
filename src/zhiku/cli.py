@@ -480,6 +480,7 @@ def run_daily_cmd(
             retries=settings.data.retries,
             workers=4,
             detail_financials=settings.data.detail_financials,
+            hist_financials=False,
             progress=lambda m: typer.echo(m, err=True),
         )
         timings["sync"] = time.monotonic() - t0
@@ -616,6 +617,29 @@ def factor_research(
     kept = payload["payload"].get("kept") or []
     typer.echo(
         f"完成 {payload['payload'].get('n_experiments')} 个实验；"
+        f"测试集查看次数={payload['payload'].get('test_looks')}；"
+        f"保留={kept}；锁={payload['payload'].get('locked')}；日志={dest}"
+    )
+
+
+@factor_app.command("research-round2")
+def factor_research_round2(
+    ctx: typer.Context,
+    out_dir: Optional[Path] = typer.Option(None, "--out", help="实验日志目录，默认 artifacts/round2"),
+    asof_text: Optional[str] = typer.Option(None, "--asof"),
+) -> None:
+    """第二轮单变量：相对锁定 z-score；测试集只看一次。产出不进 git。"""
+    from zhiku.data.store import MarketStore
+    from zhiku.factors.experiment import run_round2
+
+    paths: Paths = ctx.obj["paths"]
+    store = MarketStore(paths.data_dir)
+    dest = out_dir or Path("/opt/cursor/artifacts/zhiku-quant-round2")
+    asof = _parse_date(asof_text)
+    payload = run_round2(store, asof=asof, out_dir=dest, models_dir=paths.models_dir)
+    kept = payload["payload"].get("kept") or []
+    typer.echo(
+        f"第二轮完成 {payload['payload'].get('n_experiments')} 个实验；"
         f"测试集查看次数={payload['payload'].get('test_looks')}；"
         f"保留={kept}；锁={payload['payload'].get('locked')}；日志={dest}"
     )
@@ -795,6 +819,7 @@ def data_sync(
     include_global: Optional[bool] = typer.Option(None, "--include-global/--skip-global"),
     workers: int = typer.Option(4, "--workers", help="日线并行数（baostock 子进程）"),
     incremental: bool = typer.Option(False, "--incremental/--full", help="只拉 last_ok 前几天"),
+    hist_fin: Optional[bool] = typer.Option(None, "--hist-fin/--skip-hist-fin", help="补历史季报/分红/预告"),
 ) -> None:
     """增量同步 A 股列表/成分/日线/财报到 ZHIKU_KB/data。可断点续传。"""
     from zhiku.data.store import MarketStore
@@ -824,6 +849,7 @@ def data_sync(
         incremental=incremental,
         lookback_days=ds.incremental_lookback_days,
         detail_financials=ds.detail_financials,
+        hist_financials=hist_fin if hist_fin is not None else ds.hist_financials,
         progress=lambda m: typer.echo(m, err=True),
     )
     typer.echo(report.summary())

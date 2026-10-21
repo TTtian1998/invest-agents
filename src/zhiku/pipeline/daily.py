@@ -37,6 +37,7 @@ class DailyResult:
     screens: dict[str, list[dict]] = field(default_factory=dict)
     backtests: dict[str, dict] = field(default_factory=dict)
     gated_out: list[str] = field(default_factory=list)
+    insufficient: list[str] = field(default_factory=list)
     candidates: list[dict] = field(default_factory=list)
     audits: list[dict] = field(default_factory=list)
     news: dict = field(default_factory=dict)
@@ -167,6 +168,7 @@ def run_daily(
 
     active_screens = dict(bundle.screens)
     gated: list[str] = []
+    insufficient: list[str] = []
     backtests: dict[str, dict] = {}
     benches: dict = {}
     membership = pit.membership if pit is not None else None
@@ -179,7 +181,10 @@ def run_daily(
             universe_note=universe_note,
         )
         for bname, bres in benches.items():
-            backtests[bname] = bres.to_dict()
+            payload = bres.to_dict()
+            if bname in {"universe_ew", "csi300", "csi800"}:
+                payload["gate_status"] = "对照"
+            backtests[bname] = payload
         if benches.get("universe_ew") and (benches.get("csi300") or benches.get("csi800")):
             probe = attach_benchmarks(
                 benches["universe_ew"],
@@ -217,42 +222,57 @@ def run_daily(
                     names=list(bundle.screens),
                 )
                 notes.append(
-                    "闸门：每月时点重算名单（T 日及之前数据），T+1 开盘成交，涨停买不进；"
-                    "对同池等权超额>0、Sharpe≥等权、前后半段超额都>0。"
+                    "闸门：每月时点重算名单（T 日及之前已公告数据），禁止今日静态名单；"
+                    "T+1 开盘成交，涨停买不进；覆盖月数≥80% 后才看超额>0、Sharpe≥等权、前后半段超额都>0。"
+                    "对照行同池等权是闸门实际使用的 T+1 开盘等权。"
                 )
             except Exception as exc:  # noqa: BLE001
-                notes.append(f"时点闸门失败，回退静态今日名单（该口径可能前视）：{exc}")
+                notes.append(f"时点闸门失败，不回退今日静态名单（该口径前视）：{exc}")
                 pit_results = None
         gate_benches = dict(benches)
         if pit_results and pit_results.get("universe_ew") is not None:
             gate_benches["universe_ew"] = pit_results["universe_ew"]
+            backtests["universe_ew"] = pit_results["universe_ew"].to_dict()
+            backtests["universe_ew"]["gate_status"] = "对照"
         for name, srows in bundle.screens.items():
             if pit_results and name in pit_results:
                 bt = pit_results[name]
             else:
-                picks = [r.symbol for r in srows[: settings.backtest.top_n]]
-                bt = backtest_screen(
-                    prices,
-                    picks,
-                    settings.backtest,
+                from zhiku.backtest.metrics import BacktestResult
+
+                bt = BacktestResult(
                     screen=name,
-                    delist=delist,
-                    asof=on,
-                    limit_up=limit_up,
-                    limit_down=limit_down,
-                    membership=membership,
-                    universe_note=universe_note,
+                    annualized=None,
+                    max_drawdown=None,
+                    sharpe=None,
+                    win_rate=None,
+                    turnover=None,
+                    notes=["无时点名单，禁止用今日静态 Top-N 回测（前视）"],
+                    passed_gate=False,
+                    insufficient_data=True,
+                    gate_status="数据不足",
+                    engine="pandas-pit",
                 )
             attach_benchmarks(bt, gate_benches, sanity_max_ann_gap=settings.backtest.sanity_max_ann_gap)
             finalize_gate(bt, settings.backtest)
+            if name in {"universe_ew", "csi300", "csi800"}:
+                bt.gate_status = "对照"
             backtests[name] = bt.to_dict()
-            if not bt.passed_gate:
+            cov = bt.coverage_ratio
+            cov_txt = f"{cov:.0%}" if cov is not None else "缺数据"
+            if bt.insufficient_data or bt.gate_status == "数据不足":
+                insufficient.append(name)
+                notes.append(
+                    f"公式 {name} 覆盖 {cov_txt}（空仓 {bt.n_empty if bt.n_empty is not None else '?'} 月）"
+                    f"不足 {settings.backtest.min_coverage:.0%}，数据不足，公式分不计入总分。"
+                )
+            elif not bt.passed_gate:
                 gated.append(name)
                 notes.append(
-                    f"公式 {name} 回测未达标（对同池等权超额须>0、Sharpe 不低于等权、"
-                    "前后半段超额都>0），公式分不计入总分，仅单票详情展示。"
+                    f"公式 {name} 回测未过闸（覆盖 {cov_txt}；对同池 T+1 等权超额须>0、"
+                    "Sharpe 不低于等权、前后半段超额都>0），公式分不计入总分，仅单票详情展示。"
                 )
-        for name in gated:
+        for name in [*gated, *insufficient]:
             active_screens.pop(name, None)
     else:
         if provider_kind == "live":
@@ -292,6 +312,7 @@ def run_daily(
     }
     result.backtests = backtests
     result.gated_out = gated
+    result.insufficient = insufficient
     result.candidates = [
         {
             "symbol": c.symbol,

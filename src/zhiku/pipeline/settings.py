@@ -106,6 +106,7 @@ class BacktestSettings(BaseModel):
     require_half_excess: bool = True
     fill: str = "next_open"
     n_trials: int = 9
+    min_coverage: float = 0.80
 
 
 class AISettings(BaseModel):
@@ -298,6 +299,7 @@ class DataSettings(BaseModel):
     slippage_bps: float = 5.0
     incremental_lookback_days: int = 2
     detail_financials: bool = True
+    hist_financials: bool = True
 
 
 class EventSettings(BaseModel):

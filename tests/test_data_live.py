@@ -279,6 +279,31 @@ def test_resume_skips_missing_bars(tmp_path: Path) -> None:
     assert n2 == n1
 
 
+def test_snapshot_derives_eps_from_announced_shares() -> None:
+    closes = pd.Series([20.0], index=pd.to_datetime(["2026-10-20"]))
+    row = snapshot_from_store(
+        symbol="600519",
+        asof=date(2026, 10, 20),
+        listing={"name": "示例白酒", "instrument": "stock"},
+        statements={
+            "income": {"payload": {"净利润": 100.0}},
+            "balance": {"payload": {"股东权益合计": 200.0, "股本": 50.0, "资产总计": 400.0, "负债合计": 200.0}},
+        },
+        prev_income=None,
+        prev_balance=None,
+        spot=None,
+        closes=closes,
+        amounts=None,
+        div_years=None,
+        div_yield=None,
+        shares_issued=None,
+        raw_closes=closes,
+    )
+    assert row.pe is not None and abs(row.pe - 10.0) < 1e-9
+    assert row.pb is not None and abs(row.pb - 5.0) < 1e-9
+    assert row.mktcap is not None and abs(row.mktcap - 1000.0) < 1e-9
+
+
 def test_nan_delist_is_not_risk() -> None:
     row = snapshot_from_store(
         symbol="600519",

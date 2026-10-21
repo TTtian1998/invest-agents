@@ -27,6 +27,7 @@ from zhiku.factors.dataset import (
     load_flow_features,
     load_fund_features,
     load_price_features,
+    load_revision_features,
     make_ch_features,
     make_labels,
     neutralize,
@@ -96,6 +97,7 @@ class _PoolCache:
         self.ch: dict[str, pd.DataFrame] = {}
         self.flow: dict[str, pd.DataFrame] = {}
         self.fund: dict[str, pd.DataFrame] = {}
+        self.revision: dict[str, pd.DataFrame] = {}
         self.labels: dict[tuple[str, str], pd.Series] = {}
         self.econ: dict[str, pd.Series] = {}
         self.bars: dict[str, pd.DataFrame] = {}
@@ -154,6 +156,14 @@ class _PoolCache:
                     cal = cal[cal.isin(set(cal.to_series().groupby(cal.to_period("M")).max()))]
                 self.fund[key] = add_ch_ep(load_fund_features(store, syms, cal))
             parts.append(self.fund[key])
+        if "revision" in cfg.features:
+            if key not in self.revision:
+                cal = self.px[key].index.get_level_values("date").unique()
+                if cfg.freq == "month":
+                    cal = pd.DatetimeIndex(cal)
+                    cal = cal[cal.isin(set(cal.to_series().groupby(cal.to_period("M")).max()))]
+                self.revision[key] = load_revision_features(store, syms, cal)
+            parts.append(self.revision[key])
         if not parts:
             return self.px[key]
         return pd.concat(parts, axis=1)
@@ -529,6 +539,30 @@ CANDIDATES = [
     ),
 ]
 
+LOCKED_ZSCORE = ExperimentConfig(
+    name="model_zscore",
+    model="zscore",
+    notes="第一轮锁定：截面 z-score 等权（线性）",
+)
+
+# 第二轮：相对锁定 z-score 每次只改一个变量。测试集另目录、只看一次。
+ROUND2 = [
+    ExperimentConfig(
+        "zscore_neut_ind_size",
+        model="zscore",
+        neutralize=True,
+        versus="model_zscore",
+        notes="相对锁定 z-score 只改中性化：行业均值 + 对数规模残差",
+    ),
+    ExperimentConfig(
+        "zscore_feat_revision",
+        model="zscore",
+        features=("px", "revision"),
+        versus="model_zscore",
+        notes="相对锁定 z-score 只改特征：业绩预告修正（baostock 公告日）",
+    ),
+]
+
 
 def decide_keep(baseline: ExperimentResult, cand: ExperimentResult) -> bool:
     """只用验证集 T+20 超额 RankICIR / RankIC 判断，不看测试集。"""
@@ -834,6 +868,101 @@ def run_ablation(
         "pred": pred,
         "rows": rows,
     }
+
+
+def run_round2(
+    store: MarketStore,
+    *,
+    asof: date,
+    out_dir: Path | None = None,
+    models_dir: Path | None = None,
+    peek_test: bool = True,
+) -> dict[str, Any]:
+    """相对锁定 z-score 的单变量第二轮。新目录；测试集只看一次；不重看第一轮测试集。"""
+    cache = _PoolCache()
+    rows: list[ExperimentResult] = []
+    out = Path(out_dir) if out_dir else None
+    print(f"[experiment-round2] start {LOCKED_ZSCORE.name}", flush=True)
+    parent_res, _, _ = run_one(
+        store, LOCKED_ZSCORE, asof=asof, report_splits=("valid",), cache=cache
+    )
+    parent_res.kept = True
+    rows.append(parent_res)
+    if out:
+        _write_log(out, rows)
+    kept_cfgs: list[ExperimentConfig] = []
+    by_name = {LOCKED_ZSCORE.name: parent_res}
+    for cfg in ROUND2:
+        print(f"[experiment-round2] start {cfg.name} vs {LOCKED_ZSCORE.name}", flush=True)
+        res, _, _ = run_one(
+            store, cfg, asof=asof, report_splits=("valid",), cache=cache, parent=LOCKED_ZSCORE
+        )
+        res.kept = decide_keep(parent_res, res)
+        xs = ((res.valid or {}).get("t20_xs") or {})
+        print(
+            f"[experiment-round2] done {cfg.name} keep={res.kept} "
+            f"RankIC={xs.get('rank_ic')} RankICIR={xs.get('rank_icir')}",
+            flush=True,
+        )
+        if res.kept:
+            kept_cfgs.append(cfg)
+        by_name[cfg.name] = res
+        rows.append(res)
+        if out:
+            _write_log(out, rows)
+
+    locked = LOCKED_ZSCORE
+    if kept_cfgs:
+        best = max(
+            [by_name[c.name] for c in kept_cfgs],
+            key=lambda r: float(((r.valid or {}).get("t20_xs") or {}).get("rank_icir") or -999),
+        )
+        locked = next((c for c in ROUND2 if c.name == best.name), LOCKED_ZSCORE)
+
+    test_payload = None
+    if peek_test:
+        test_rows = []
+        seen: set[str] = set()
+        for cfg in (LOCKED_ZSCORE, locked):
+            if cfg.name in seen:
+                continue
+            seen.add(cfg.name)
+            print(f"[experiment-round2] test-once {cfg.name}", flush=True)
+            tres, _, _ = run_one(
+                store, cfg, asof=asof, report_splits=("test",), cache=cache, parent=LOCKED_ZSCORE
+            )
+            test_rows.append(tres.to_dict())
+        test_payload = {
+            "looks": 1,
+            "note": "第二轮验证结束后才计算；不回写去留；不重看第一轮测试集",
+            "results": test_rows,
+        }
+        if out:
+            _write_log(out, rows, extra={"test_looks": 1, "test": test_payload})
+
+    if models_dir is not None and locked.name != LOCKED_ZSCORE.name:
+        lock_recipe(locked, Path(models_dir))
+
+    payload = {
+        "asof": asof.isoformat(),
+        "round": 2,
+        "parent": LOCKED_ZSCORE.name,
+        "split": {
+            "train_end": TRAIN_END.isoformat(),
+            "valid": f"{VALID_START}–{VALID_END}",
+            "test_start": TEST_START.isoformat(),
+            "rule": "相对锁定 z-score 每次只改一个变量；验证集决定去留；测试集只看一次",
+        },
+        "n_experiments": len(rows),
+        "test_looks": 1 if test_payload else 0,
+        "results": [r.to_dict() for r in rows],
+        "kept": [r.name for r in rows if r.kept and r.name != LOCKED_ZSCORE.name],
+        "locked": locked.name,
+        "test": test_payload,
+    }
+    if out is not None:
+        (out / "ablation.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"payload": payload, "locked": locked, "rows": rows}
 
 
 def main() -> None:

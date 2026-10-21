@@ -58,9 +58,9 @@
   </table>
   <h2>回测</h2>
   {% set pit = daily.pit_universe if daily.pit_universe is defined and daily.pit_universe else {} %}
-  <p class="note">{{ pit.label or "未标时点池" }}。闸门：对同池等权超额 > 0 且 Sharpe ≥ 等权。</p>
+  <p class="note">{{ pit.label or "未标时点池" }}。对照行是 T+1 开盘同池等权。覆盖&lt;80% 标数据不足。今日静态名单已作废（前视）。</p>
   <table>
-    <tr><th>公式</th><th>年化</th><th>最大回撤</th><th>夏普</th><th>对同池超额</th><th>闸门</th></tr>
+    <tr><th>公式</th><th>年化</th><th>最大回撤</th><th>夏普</th><th>对同池超额</th><th>覆盖</th><th>闸门</th></tr>
     {% for name, bt in daily.backtests.items() %}
     <tr>
       <td>{{ name }}</td>
@@ -68,7 +68,8 @@
       <td>{{ bt.max_drawdown }}</td>
       <td>{{ bt.sharpe }}</td>
       <td>{{ bt.excess_annualized }}</td>
-      <td>{{ "通过" if bt.passed_gate else "未通过" }}</td>
+      <td>{{ bt.coverage_ratio }}</td>
+      <td>{{ bt.gate_status or ("通过" if bt.passed_gate else "未通过") }}</td>
     </tr>
     {% endfor %}
   </table>

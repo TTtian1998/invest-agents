@@ -320,6 +320,22 @@ def monthly_screen_picks(
     return out
 
 
+def pick_coverage(picks_by_date: dict, dates: list[pd.Timestamp]) -> dict[str, float | int]:
+    """有非空篮子的决策月占比。空仓月单独计数，不把净值停住当成「策略很稳」。"""
+    n = len(dates)
+    covered = 0
+    for dt in dates:
+        names = picks_by_date.get(pd.Timestamp(dt)) or picks_by_date.get(dt) or []
+        if names:
+            covered += 1
+    return {
+        "n_months": n,
+        "n_covered": covered,
+        "n_empty": max(n - covered, 0),
+        "coverage_ratio": (covered / n) if n else 0.0,
+    }
+
+
 def universe_ew_picks(membership: dict, dates: list[pd.Timestamp], columns: list[str]) -> dict[pd.Timestamp, list[str]]:
     from zhiku.backtest.universe import members_on
 
@@ -399,8 +415,10 @@ def backtest_timed_picks(
         membership=membership,
         fill=use_fill,
     )
+    dates = sorted({pd.Timestamp(k) for k in picks_by_date})
+    cov = pick_coverage(picks_by_date, dates)
     if nav.empty:
-        return BacktestResult(
+        empty = BacktestResult(
             screen=screen,
             annualized=None,
             max_drawdown=None,
@@ -411,7 +429,12 @@ def backtest_timed_picks(
             passed_gate=False,
             engine="pandas-pit",
             fill=use_fill,
+            insufficient_data=True,
+            gate_status="数据不足",
         )
+        from zhiku.backtest.engine import attach_coverage
+
+        return attach_coverage(empty, n_months=int(cov["n_months"]), n_covered=int(cov["n_covered"]))
     result = summarize_nav(
         nav,
         turnover=turnover,
@@ -432,8 +455,9 @@ def backtest_timed_picks(
         n_trials=int(settings.n_trials or 9),
         rf=settings.rf,
     )
-    from zhiku.backtest.engine import finalize_gate
+    from zhiku.backtest.engine import attach_coverage, finalize_gate
 
+    attach_coverage(result, n_months=int(cov["n_months"]), n_covered=int(cov["n_covered"]))
     return finalize_gate(result, settings)
 
 
@@ -562,6 +586,11 @@ def evaluate_screens(
         results[name] = bt
     if not bench_nav.empty:
         ew_bt = summarize_nav(bench_nav, rf=settings.backtest.rf, periods_per_year=12.0, screen="universe_ew")
-        ew_bt.notes = ["时点股票池等权，T+1 开盘、成本 0"]
+        ew_bt.notes = ["时点股票池等权，T+1 开盘、成本 0。对照行用此净值，不用月末收盘等权。"]
+        ew_bt.fill = settings.backtest.fill
+        ew_bt.gate_status = "对照"
+        from zhiku.backtest.engine import attach_coverage
+
+        attach_coverage(ew_bt, n_months=len(dates), n_covered=len(dates))
         results["universe_ew"] = ew_bt
     return results

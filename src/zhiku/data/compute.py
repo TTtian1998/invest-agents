@@ -49,11 +49,19 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "total_assets": ("资产总计", "Total Assets", "TOTAL_ASSETS"),
     "total_liab": ("负债合计", "Total Liab", "TOTAL_LIABILITIES", "负债总计"),
     "equity": ("股东权益合计", "Stockholders Equity", "TOTAL_EQUITY", "所有者权益合计"),
-    "shares": ("实收资本(或股本)", "Ordinary Shares Number", "SHARE_CAPITAL", "股本"),
     "inventory": ("存货", "Inventory", "INVENTORY"),
     "receivables": ("应收账款", "Net Receivables", "ACCOUNTS_RECE"),
-    "eps": ("每股收益", "EPS", "basicEPS"),
-    "bps": ("每股净资产", "Book Value Per Share", "BVPS"),
+    "eps": (
+        "每股收益",
+        "基本每股收益",
+        "EPS",
+        "basicEPS",
+        "epsTTM",
+        "BASIC_EPS",
+        "每股收益-基本每股收益",
+    ),
+    "bps": ("每股净资产", "Book Value Per Share", "BVPS", "BPS", "bvps"),
+    "shares": ("实收资本(或股本)", "Ordinary Shares Number", "SHARE_CAPITAL", "股本", "总股本"),
     "rd": ("研发费用", "研发支出", "Research And Development", "R&D"),
     "roe_pct": ("净资产收益率", "ROE"),
     "debt_asset_pct": ("资产负债率",),
@@ -396,7 +404,17 @@ def snapshot_from_store(
     rd = pick_num(income, "rd")
     rd_sales = ratio(rd, rev)
     eps = pick_num(income, "eps")
-    bps = pick_num(income, "bps")
+    bps = pick_num(income, "bps") or pick_num(balance, "bps")
+    shares = pick_num(balance, "shares") or pick_num(income, "shares")
+    if shares is not None and shares <= 0:
+        shares = None
+    # 面值约 1 元时，实收资本≈股数；只用已公告科目，不借今日 spot
+    if eps is None and ni is not None and shares:
+        eps = ni / shares
+    if bps is None and equity is not None and shares:
+        bps = equity / shares
+    if mktcap is None and shares is not None and last_close is not None:
+        mktcap = shares * last_close
     if mktcap is None and equity is not None and bps is not None and bps != 0 and last_close is not None:
         mktcap = (equity / bps) * last_close
     if pe is None and last_close is not None and eps is not None and eps != 0:
