@@ -136,11 +136,9 @@ def run_news(
 
         live_items, errors = fetch_live(on, settings.news, cache=SQLiteCache(paths.cache))
         items.extend(live_items)
-        if fixture_news.is_file():
-            extra, extra_rx = load_fixture_news(fixture_news)
-            items.extend(extra)
-            reactions.extend(extra_rx)
-            notes.append("live 源已拉取；fixture 样本仅作补充。")
+        notes.append(f"live 新闻 {len(live_items)} 条（不混入离线样本）。")
+        if not live_items:
+            notes.append("缺数据：live 新闻为空（各源失败或未配置），不回退虚构样本。")
         for err in errors:
             if err.source == "twitter":
                 kol_skipped = err.reason

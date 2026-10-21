@@ -10,7 +10,7 @@ from zhiku.screens.fundamentals import Fundamentals
 from zhiku.screens.greenblatt import ScreenRow, screen_greenblatt
 from zhiku.screens.multifactor import screen_multifactor
 from zhiku.screens.piotroski import screen_piotroski
-from zhiku.screens.quality import QualityResult, filter_universe
+from zhiku.screens.quality import QualityResult, filter_tradable, filter_universe
 
 SCREEN_FUNCS = {
     "greenblatt": lambda rows, cfg: screen_greenblatt(rows, cfg.greenblatt),
@@ -49,13 +49,17 @@ def run_screens(
     names: list[str] | None = None,
 ) -> ScreenBundle:
     passed, quality = filter_universe(rows, settings.quality, settings.universe)
+    tradable, _ = filter_tradable(rows, settings.universe)
     wanted = names or list(SCREEN_FUNCS)
     screens: dict[str, list[ScreenRow]] = {}
     for name in wanted:
         fn = SCREEN_FUNCS.get(name)
         if fn is None:
             raise KeyError(f"未知选股公式 {name}，可选：{', '.join(SCREEN_FUNCS)}")
-        screens[name] = fn(passed, settings)
+        cfg = getattr(settings, name, None)
+        require_q = True if cfg is None else bool(getattr(cfg, "require_quality", True))
+        pool = passed if require_q else tradable
+        screens[name] = fn(pool, settings)
     return ScreenBundle(
         universe_size=len(rows),
         quality_passed=[r.symbol for r in passed],

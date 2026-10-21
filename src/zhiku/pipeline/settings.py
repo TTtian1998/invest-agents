@@ -39,11 +39,13 @@ class QualitySettings(BaseModel):
 class GreenblattSettings(BaseModel):
     top_n: int = 30
     min_score: float = 0.0
+    require_quality: bool = False
 
 
 class PiotroskiSettings(BaseModel):
     min_score: int = 7
     top_n: int = 30
+    require_quality: bool = False
 
 
 class DividendSettings(BaseModel):
@@ -52,6 +54,7 @@ class DividendSettings(BaseModel):
     min_yield: float = 0.03
     min_consecutive_years: int = 3
     top_n: int = 30
+    require_quality: bool = False
 
 
 class MultifactorSettings(BaseModel):
@@ -65,6 +68,7 @@ class MultifactorSettings(BaseModel):
         }
     )
     top_n: int = 30
+    require_quality: bool = True
 
 
 class MergeSettings(BaseModel):
@@ -145,13 +149,18 @@ class NewsSettings(BaseModel):
         default_factory=lambda: [
             "https://www.cnbc.com/id/100003114/device/rss/rss.html",
             "https://feeds.reuters.com/reuters/businessNews",
+            "https://www.caixin.com/rss/latest.xml",
+            "https://www.yicai.com/rss/news.xml",
         ]
     )
     official_feeds: dict[str, str] = Field(
         default_factory=lambda: {
             "fed": "https://www.federalreserve.gov/feeds/press_all.xml",
             "bls": "https://www.bls.gov/feed/bls_latest.rss",
+            "bea": "https://www.bea.gov/rss.xml",
             "ecb": "https://www.ecb.europa.eu/rss/press.html",
+            "pbc": "http://www.pbc.gov.cn/goutongjiaoliu/113456/113469/11040/index1.html",
+            "stats_cn": "https://www.stats.gov.cn/sj/zxfb/rss.xml",
         }
     )
     stop_pct: float = 0.03
@@ -224,6 +233,8 @@ class DataSettings(BaseModel):
     extra_symbols: list[str] = Field(default_factory=lambda: ["510300"])
     cost_bps: float = 10.0
     slippage_bps: float = 5.0
+    incremental_lookback_days: int = 2
+    detail_financials: bool = True
 
 
 class EventSettings(BaseModel):

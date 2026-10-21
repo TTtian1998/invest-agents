@@ -77,6 +77,8 @@ def fetch_live(
     # 二级媒体（付费墙源只保留标题/摘要/链接）
     add("eastmoney_news", flags.eastmoney_news, lambda: _ak_news("stock_news_em", "eastmoney", on, cache))
     add("cls", flags.cls, lambda: _ak_news("stock_info_global_cls", "cls", on, cache))
+    add("akshare_flash", flags.cls, lambda: _ak_news("stock_info_global_sina", "cls", on, cache))
+    add("akshare_cctv", flags.official_rss, lambda: _ak_news("news_cctv", "nbs", on, cache, kind="official"))
     add("yfinance_news", flags.yfinance_news, lambda: _yf_news(["AAPL", "0700.HK"], on))
     add("finnhub", flags.finnhub, lambda: _finnhub(on, cache))
     add("rss", flags.rss, lambda: _rss(settings.rss_feeds, on, paywall_ok=True))
@@ -248,6 +250,10 @@ def _source_from_feed(feed: str) -> str:
         ("caixin", "caixin"),
         ("yicai", "yicai"),
         ("stcn", "stcn"),
+        ("bea.gov", "bea"),
+        ("stats.gov", "nbs"),
+        ("pbc.gov", "pbc"),
+        ("people.com", "gov.cn"),
     )
     for needle, name in mapping:
         if needle in low:

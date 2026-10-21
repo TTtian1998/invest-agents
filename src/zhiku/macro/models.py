@@ -30,6 +30,23 @@ ANCHOR_ASSETS: tuple[tuple[str, str], ...] = (
 
 ANCHOR_LABELS: dict[str, str] = dict(ANCHOR_ASSETS)
 
+# yfinance 代码。没有对应 ticker 的不进 live 锚定。
+ANCHOR_YF: dict[str, str] = {
+    "US2Y": "^IRX",
+    "US10Y": "^TNX",
+    "DXY": "DX-Y.NYB",
+    "USDCNH": "USDCNH=X",
+    "GOLD": "GC=F",
+    "WTI": "CL=F",
+    "BRENT": "BZ=F",
+    "COPPER": "HG=F",
+    "NQ": "NQ=F",
+    "ES": "ES=F",
+    "HSTECH": "^HSTECH",
+    "CSI300": "000300.SS",
+    "VIX": "^VIX",
+}
+
 EVENT_TYPE_CN: dict[str, str] = {
     "US_NFP": "美国非农",
     "US_UNEMP": "美国失业率",

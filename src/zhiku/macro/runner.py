@@ -114,16 +114,25 @@ def run_macro(
     asof_dt = now_shanghai(asof_dt)
 
     cal_path = paths.fixtures / "macro_calendar.yaml"
-    events = load_calendar(cal_path)
-    if not events:
-        notes.append("缺数据：无 macro_calendar.yaml，宏观日历为空。")
+    events: list = []
     if provider_kind == "live" and settings.macro.enabled:
         live_events, live_notes = live_calendar(on)
         notes.extend(live_notes)
         events.extend(live_events)
-        notes.append("live 宏观接口仅作补充；预期差仍以可解析样本为准，不编造一致预期。")
+        if live_events:
+            notes.append(f"live 宏观日历 {len(live_events)} 条（不混入离线样本）。")
+        else:
+            notes.append("缺数据：live 宏观日历为空，不回退虚构样本。")
+        from zhiku.macro.sources import live_anchors
+
+        live_anchor_rows, anchor_notes = live_anchors()
+        notes.extend(anchor_notes)
     else:
+        events = load_calendar(cal_path)
+        if not events:
+            notes.append("缺数据：无 macro_calendar.yaml，宏观日历为空。")
         notes.append("使用离线虚构宏观样本（不访问网络）。")
+        live_anchor_rows = []
 
     attach_surprise(events)
     for ev in events:
@@ -157,7 +166,10 @@ def run_macro(
         else:
             rate = live_rate
 
-    anchors = snapshots_from_raw(load_yaml(paths.fixtures / "anchor_prices.yaml"))
+    if provider_kind == "live" and live_anchor_rows:
+        anchors = live_anchor_rows
+    else:
+        anchors = snapshots_from_raw(load_yaml(paths.fixtures / "anchor_prices.yaml"))
     geo = load_geo(paths.fixtures / "geopolitical.yaml")
     chains = load_chains(paths.kb / "config" / "chains.yaml")
     fired: list[dict] = []

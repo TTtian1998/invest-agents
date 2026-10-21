@@ -23,7 +23,7 @@ def _env(tmp_kb: Path, examples_dir: Path) -> dict[str, str]:
 def test_help_lists_commands() -> None:
     result = RUNNER.invoke(app, ["--help"])
     assert result.exit_code == 0
-    for name in ("check", "close", "review", "exposure", "debate", "news", "macro", "daily", "screen", "data"):
+    for name in ("check", "close", "review", "exposure", "debate", "news", "macro", "daily", "run-daily", "screen", "data"):
         assert name in result.output
 
 

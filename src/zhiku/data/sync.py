@@ -74,6 +74,9 @@ def sync_market(
     sleep: float | None = None,
     retries: int = 3,
     workers: int = 1,
+    incremental: bool = False,
+    lookback_days: int = 2,
+    detail_financials: bool = True,
     progress: Progress | None = None,
 ) -> SyncReport:
     import time
@@ -84,6 +87,16 @@ def sync_market(
     fetcher = fetcher or AkshareFetcher(sleep=sleep, retries=retries)
     report = SyncReport(universe=universe, start=start, end=end)
     workers = max(1, int(workers))
+    skip_bulk = False
+    if incremental:
+        last_bar = store.max_last_ok("bars:qfq")
+        if last_bar is not None:
+            start = max(start, last_bar - timedelta(days=max(0, lookback_days)))
+            report.notes.append(f"增量同步：日线从 {start} 起（last_ok- {lookback_days}d）")
+        last_bulk = store.max_last_ok("bulk:income:" + _last_quarter(end).isoformat())
+        if last_bulk is not None:
+            skip_bulk = True
+            report.notes.append("增量同步：本季整表已在库，跳过整表财报")
 
     listings_ok = store.last_ok("listings", "*")
     if resume and listings_ok is not None and listings_ok >= end:
@@ -98,14 +111,24 @@ def sync_market(
 
     # 先前复权（回测/qlib），再财报（选股 PIT），最后不复权
     _sync_cn_bars(store, fetcher, symbols, start, end, resume, report, "qfq", workers, progress)
-    bulk_ok = _sync_bulk_financials(store, fetcher, start, end, resume, report, progress)
-    if not bulk_ok:
-        report.notes.append("整表财报不可用，回退到按代码拉三张报表（较慢）")
-        for i, symbol in enumerate(symbols, 1):
-            if i == 1 or i % 50 == 0 or i == len(symbols):
-                _log(progress, f"财报 {i}/{len(symbols)} {symbol}")
-            _sync_cn_symbol_fin(store, fetcher, symbol, resume, report)
+    if skip_bulk:
+        bulk_ok = True
+    else:
+        bulk_ok = _sync_bulk_financials(store, fetcher, start, end, resume, report, progress)
+        if not bulk_ok:
+            report.notes.append("整表财报不可用，回退到按代码拉三张报表（较慢）")
+            for i, symbol in enumerate(symbols, 1):
+                if i == 1 or i % 50 == 0 or i == len(symbols):
+                    _log(progress, f"财报 {i}/{len(symbols)} {symbol}")
+                _sync_cn_symbol_fin(store, fetcher, symbol, resume, report)
+    if detail_financials:
+        _sync_detail_financials(store, fetcher, symbols, resume, report, workers, progress)
     _sync_cn_bars(store, fetcher, symbols, start, end, resume, report, "none", workers, progress)
+    cov = store.coverage(symbols, adjust="qfq")
+    report.notes.append(
+        f"日线覆盖 {cov['have']}/{cov['wanted']}（{cov['ratio']:.1%}），"
+        f"未覆盖 {cov['missing']} 只"
+    )
 
     if include_global:
         g_syms = _sync_global_lists(store, fetcher, end, hk_lists or ["hsi", "hstech"], us_lists or ["sp500", "ndx"], report, progress)
@@ -233,6 +256,103 @@ def _next_quarter(d: date) -> date:
     if d.month == 9:
         return date(d.year, 12, 31)
     return date(d.year + 1, 3, 31)
+
+
+def _last_quarter(end: date) -> date:
+    ends = _quarter_ends(date(end.year - 1, 1, 1), end)
+    return ends[-1] if ends else date(end.year, 3, 31)
+
+
+def _needs_detail(store: MarketStore, symbol: str) -> bool:
+    from zhiku.data.compute import pick_num
+
+    stmts = store.statements_asof(symbol, now_shanghai().date())
+    income = (stmts.get("income") or {}).get("payload") or {}
+    balance = (stmts.get("balance") or {}).get("payload") or {}
+    has_ebit = pick_num(income, "ebit") is not None
+    has_ca = pick_num(balance, "current_assets") is not None
+    has_cl = pick_num(balance, "current_liab") is not None
+    has_fa = pick_num(balance, "fixed_assets") is not None
+    return not (has_ebit and has_ca and has_cl and has_fa)
+
+
+def _sync_detail_financials(
+    store: MarketStore,
+    fetcher: MarketFetcher,
+    symbols: list[str],
+    resume: bool,
+    report: SyncReport,
+    workers: int,
+    progress: Progress | None,
+) -> None:
+    from zhiku.data.detail_fin import merge_payload
+
+    job = "detail_fin"
+    pending: list[str] = []
+    for symbol in symbols:
+        if resume and store.job_status(job, symbol) == "missing":
+            continue
+        if resume and store.last_ok(job, symbol) is not None and not _needs_detail(store, symbol):
+            continue
+        if not _needs_detail(store, symbol):
+            store.set_state(job, symbol, last_ok=now_shanghai().date(), status="ok")
+            continue
+        pending.append(symbol)
+    _log(progress, f"明细财务待拉 {len(pending)}/{len(symbols)}")
+    if not pending:
+        return
+
+    def _fetch(symbol: str):
+        raw = timed_call(fetcher.cn_statement_detail, 50, symbol, symbol=symbol, field=job)
+        return symbol, raw
+
+    def _commit(symbol: str, raw) -> None:
+        if isinstance(raw, MissingData):
+            store.log_missing(symbol, job, None, raw.reason)
+            store.set_state(job, symbol, last_ok=None, status="missing", error=raw.reason)
+            report.missing += 1
+            return
+        for row in raw:
+            period = row.get("period")
+            kind = row.get("kind")
+            existing = store.statement_period(symbol, kind, period) if period and kind else None
+            if existing:
+                row["payload"] = merge_payload(existing.get("payload"), row.get("payload"))
+                if row.get("announced_is_period") and existing.get("announced"):
+                    try:
+                        row["announced"] = date.fromisoformat(str(existing["announced"])[:10])
+                        row["announced_is_period"] = False
+                    except ValueError:
+                        pass
+            if row.get("announced_is_period"):
+                store.log_missing(symbol, f"{kind}.announced", period, "明细财务无公告日，用报告期")
+                report.missing += 1
+            store.upsert_statements([row])
+        store.set_state(job, symbol, last_ok=now_shanghai().date(), status="ok")
+        report.statement_symbols += 1
+
+    done = 0
+    pool_n = min(max(1, workers), len(pending))
+    if pool_n <= 1:
+        for symbol in pending:
+            _, raw = _fetch(symbol)
+            _commit(symbol, raw)
+            done += 1
+            if done == 1 or done % 20 == 0 or done == len(pending):
+                _log(progress, f"明细财务 {done}/{len(pending)} {symbol}")
+        return
+    with ThreadPoolExecutor(max_workers=pool_n) as pool:
+        futs = {pool.submit(_fetch, s): s for s in pending}
+        for fut in as_completed(futs):
+            symbol = futs[fut]
+            try:
+                symbol, raw = fut.result()
+            except Exception as exc:  # noqa: BLE001
+                raw = MissingData(str(exc), symbol=symbol)
+            _commit(symbol, raw)
+            done += 1
+            if done == 1 or done % 20 == 0 or done == len(pending):
+                _log(progress, f"明细财务 {done}/{len(pending)} {symbol}")
 
 
 def _sync_bulk_financials(

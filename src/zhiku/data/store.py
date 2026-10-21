@@ -41,6 +41,11 @@ class MarketStore:
         self.bars_dir = self.root / "bars"
         self._init_schema()
 
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(dividends)").fetchall()}
+        if "yield" not in cols:
+            conn.execute("ALTER TABLE dividends ADD COLUMN yield REAL")
+
     def _init_schema(self) -> None:
         with _connect(self.sqlite_path) as conn:
             conn.executescript(
@@ -86,6 +91,7 @@ class MarketStore:
                     ex_date TEXT NOT NULL,
                     announced TEXT,
                     amount REAL,
+                    yield REAL,
                     PRIMARY KEY (symbol, ex_date)
                 );
                 CREATE TABLE IF NOT EXISTS spot (
@@ -112,6 +118,7 @@ class MarketStore:
                 );
                 """
             )
+            self._migrate(conn)
 
     def is_empty(self) -> bool:
         with _connect(self.sqlite_path) as conn:
@@ -285,16 +292,60 @@ class MarketStore:
                     _iso(row["ex_date"]),
                     _iso(row.get("announced")),
                     row.get("amount"),
+                    row.get("yield"),
                 )
             )
         if not payload:
             return 0
         with _connect(self.sqlite_path) as conn:
             conn.executemany(
-                "INSERT OR REPLACE INTO dividends(symbol, ex_date, announced, amount) VALUES (?,?,?,?)",
+                "INSERT OR REPLACE INTO dividends(symbol, ex_date, announced, amount, yield) VALUES (?,?,?,?,?)",
                 payload,
             )
         return len(payload)
+
+    def statement_period(self, symbol: str, kind: str, period: date) -> dict[str, Any] | None:
+        with _connect(self.sqlite_path) as conn:
+            row = conn.execute(
+                """
+                SELECT period, announced, payload FROM statements
+                WHERE symbol=? AND kind=? AND period=?
+                ORDER BY announced DESC LIMIT 1
+                """,
+                (symbol, kind, _iso(period)),
+            ).fetchone()
+        if not row:
+            return None
+        return {"period": row[0], "announced": row[1], "payload": json.loads(row[2])}
+
+    def max_last_ok(self, job: str) -> date | None:
+        with _connect(self.sqlite_path) as conn:
+            row = conn.execute(
+                "SELECT MAX(last_ok) FROM sync_state WHERE job=? AND status='ok'",
+                (job,),
+            ).fetchone()
+        if not row or not row[0]:
+            return None
+        return date.fromisoformat(str(row[0])[:10])
+
+    def bar_symbols(self, adjust: str = "qfq") -> set[str]:
+        with _connect(self.sqlite_path) as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT symbol FROM bars WHERE adjust=?",
+                (adjust,),
+            ).fetchall()
+        return {str(r[0]) for r in rows}
+
+    def coverage(self, symbols: list[str], *, adjust: str = "qfq") -> dict[str, Any]:
+        have = self.bar_symbols(adjust)
+        wanted = [s for s in symbols]
+        ok = [s for s in wanted if s in have]
+        return {
+            "wanted": len(wanted),
+            "have": len(ok),
+            "missing": len(wanted) - len(ok),
+            "ratio": (len(ok) / len(wanted)) if wanted else 0.0,
+        }
 
     def upsert_spot(self, asof: date, rows: Iterable[dict[str, Any]]) -> int:
         key = _iso(asof)

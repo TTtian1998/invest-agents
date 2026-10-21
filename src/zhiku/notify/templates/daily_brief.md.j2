@@ -1,0 +1,55 @@
+# zhiku 日报摘要 {{ daily.asof }}
+
+研究工具，不构成投资建议。不含持仓数量/成本/账户。
+
+## 宏观锚点
+{% set m = daily.macro or {} %}
+- 地缘：{{ m.geo.temperature if m.geo else "缺数据" }}；利率：{{ m.rate_expectation.source if m.rate_expectation else "缺数据" }}
+{% if m.window_banners %}
+{% for w in m.window_banners[:4] %}
+- {{ w }}
+{% endfor %}
+{% endif %}
+{% for e in (m.released or [])[:6] %}
+- 已公布 {{ e.name }} 预期 {{ e.consensus if e.consensus is not none else "缺数据" }} / 今值 {{ e.actual if e.actual is not none else "缺数据" }} z={{ e.surprise_z if e.surprise_z is not none else "缺数据" }}
+{% endfor %}
+{% for e in (m.calendar_7d or [])[:8] %}
+- 日历 {{ e.name }} {{ e.scheduled_shanghai }} 重要度{{ e.importance }}
+{% endfor %}
+
+## 候选前 20
+股票池 {{ daily.universe_size }}；缺数据 {{ "%.1f"|format((daily.missing_ratio or 0)*100) }}%。
+{% for c in (daily.candidates or [])[:20] %}
+- {{ c.symbol }} {{ c.name }} 总分 {{ "%.1f"|format(c.total or 0) }}（公式 {{ "%.1f"|format(c.formula_score or 0) }} / 量化 {{ "%.1f"|format(c.qlib_score or 0) }}）{{ (c.screens or {})|join(",") }}
+{% endfor %}
+{% if not daily.candidates %}
+- 无候选
+{% endif %}
+
+## 公式回测闸门
+{% for name, bt in (daily.backtests or {}).items() %}
+- {{ name }} 年化={{ bt.annualized }} 回撤={{ bt.max_drawdown }} Sharpe={{ bt.sharpe }} {{ "过闸" if bt.passed_gate else "未过闸" }}
+{% endfor %}
+qlib {{ daily.qlib.kind if daily.qlib else "未训练" }} IC={{ daily.qlib.ic if daily.qlib else "缺数据" }} RankIC={{ daily.qlib.rank_ic if daily.qlib else "缺数据" }} ICIR={{ daily.qlib.icir if daily.qlib else "缺数据" }}
+
+## 多空机会
+{% set nws = daily.news or {} %}
+{% for o in (nws.opportunities or [])[:12] %}
+- [{{ o.tier or o.group or "观察" }}] {{ o.symbol or "" }} {{ o.headline or o.title or "" }}
+{% endfor %}
+{% if not nws.opportunities %}
+- 无
+{% endif %}
+
+## 新闻与应急
+新闻 {{ (nws.clusters or [])|length }} 条。
+{% set em = nws.emergency or {} %}
+应急：{{ "开启" if em.active else "否" }}{% if em.freeze_adds %}；禁加{% endif %}
+{% for b in (em.playbook or [])[:4] %}
+- {{ b }}
+{% endfor %}
+
+## 备注
+{% for n in (daily.notes or [])[:12] %}
+- {{ n }}
+{% endfor %}

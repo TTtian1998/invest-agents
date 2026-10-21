@@ -125,7 +125,20 @@ def latest_model(models_dir: Path) -> tuple[Path | None, dict[str, Any] | None]:
     models_dir = Path(models_dir)
     if not models_dir.is_dir():
         return None, None
-    metas = sorted(models_dir.glob("*.meta.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    selected_pkl = models_dir / "selected.pkl"
+    selected_meta = models_dir / "selected.meta.json"
+    if selected_pkl.is_file():
+        meta = {}
+        if selected_meta.is_file():
+            meta = json.loads(selected_meta.read_text(encoding="utf-8"))
+        meta.setdefault("path", str(selected_pkl))
+        meta.setdefault("status", "trained")
+        return selected_pkl, meta
+    metas = sorted(
+        [p for p in models_dir.glob("*.meta.json") if p.name != "selected.meta.json"],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
     if not metas:
         pkls = sorted(models_dir.glob("*.pkl"), key=lambda p: p.stat().st_mtime, reverse=True)
         if not pkls:
@@ -136,6 +149,49 @@ def latest_model(models_dir: Path) -> tuple[Path | None, dict[str, Any] | None]:
     if not pkl.is_file():
         pkl = metas[0].with_name(metas[0].name.replace(".meta.json", ".pkl"))
     return (pkl if pkl.is_file() else None), meta
+
+
+def needs_retrain(meta: dict[str, Any] | None, asof: date) -> bool:
+    if not meta or meta.get("status") == "未训练":
+        return True
+    trained = meta.get("trained_on")
+    if not trained:
+        return True
+    try:
+        d = date.fromisoformat(str(trained)[:10])
+    except ValueError:
+        return True
+    return (d.year, d.month) < (asof.year, asof.month)
+
+
+def _score_tuple(meta: dict[str, Any]) -> tuple[float, float, float]:
+    def _f(key: str) -> float:
+        v = meta.get(key)
+        try:
+            return float(v) if v is not None else float("-inf")
+        except (TypeError, ValueError):
+            return float("-inf")
+
+    return (_f("rank_ic"), _f("ic"), _f("icir"))
+
+
+def pick_better(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
+    """RankIC → IC → ICIR，取更好的。"""
+    return a if _score_tuple(a) >= _score_tuple(b) else b
+
+
+def _icir(pred: pd.Series, label: pd.Series, dates: pd.Series) -> float | None:
+    frame = pd.DataFrame({"pred": pred, "label": label, "date": dates})
+    frame = frame.replace([np.inf, -np.inf], np.nan).dropna()
+    if frame.empty:
+        return None
+    daily = frame.groupby("date").apply(
+        lambda g: g["pred"].corr(g["label"], method="spearman") if len(g) >= 5 else np.nan
+    )
+    daily = daily.dropna()
+    if len(daily) < 3 or float(daily.std()) == 0:
+        return None
+    return float(daily.mean() / daily.std())
 
 
 def train_alpha158(qlib_dir: Path, model_path: Path) -> str:
@@ -224,13 +280,16 @@ def _train_qlib(qlib_dir: Path, model_path: Path) -> str:
     with model_path.open("wb") as fh:
         pickle.dump({"kind": "qlib_lgb", "model": model}, fh)
     pred = model.predict(dataset, segment="test")
-    ic = rank_ic = None
+    ic = rank_ic = icir = None
     try:
         label = dataset.prepare("test", col_set="label")
-        aligned = pd.concat([pred.droplevel(0) if False else pred, label], axis=1)
+        aligned = pd.concat([pred, label], axis=1)
         aligned.columns = ["pred", "label"]
         ic = float(aligned["pred"].corr(aligned["label"]))
         rank_ic = float(aligned["pred"].corr(aligned["label"], method="spearman"))
+        dates = aligned.index.get_level_values(0) if hasattr(aligned.index, "get_level_values") else None
+        if dates is not None:
+            icir = _icir(aligned["pred"].reset_index(drop=True), aligned["label"].reset_index(drop=True), pd.Series(dates))
     except Exception:  # noqa: BLE001
         pass
     meta = {
@@ -238,6 +297,7 @@ def _train_qlib(qlib_dir: Path, model_path: Path) -> str:
         "trained_on": now_shanghai().date().isoformat(),
         "ic": ic,
         "rank_ic": rank_ic,
+        "icir": icir,
         "path": str(model_path),
         "qlib_dir": str(qlib_dir),
         "status": "trained",
@@ -283,11 +343,13 @@ def _train_lgb_lite(
     }
     booster = lgb.train(params, ds, num_boost_round=80)
     ic = rank_ic = None
+    icir = None
     if not test.empty:
         pred = booster.predict(test[FEATURE_NAMES])
         y = test["label"].to_numpy()
         ic = float(pd.Series(pred).corr(pd.Series(y)))
         rank_ic = float(pd.Series(pred).corr(pd.Series(y), method="spearman"))
+        icir = _icir(pd.Series(pred), test["label"].reset_index(drop=True), pd.Series(test.index.get_level_values("date")))
     payload = {"kind": "lgb_lite", "model": booster, "features": FEATURE_NAMES}
     with model_path.open("wb") as fh:
         pickle.dump(payload, fh)
@@ -296,6 +358,7 @@ def _train_lgb_lite(
         "trained_on": now_shanghai().date().isoformat(),
         "ic": ic,
         "rank_ic": rank_ic,
+        "icir": icir,
         "n_samples": int(len(data)),
         "n_train": int(len(train)),
         "n_test": int(len(test)),
@@ -303,6 +366,56 @@ def _train_lgb_lite(
         "status": "trained",
         "features": FEATURE_NAMES,
     }
+
+
+def train_and_select(
+    *,
+    qlib_dir: Path,
+    models_dir: Path,
+    store: MarketStore,
+    start: date | None = None,
+    end: date | None = None,
+) -> dict[str, Any]:
+    """训练 lgb_lite，尝试 Alpha158；按 RankIC/IC/ICIR 选默认。"""
+    models_dir = Path(models_dir)
+    models_dir.mkdir(parents=True, exist_ok=True)
+    lite_path = models_dir / "lgb_lite.pkl"
+    qlib_path = models_dir / "lgb_alpha158.pkl"
+    comparison: dict[str, Any] = {"notes": []}
+    lite_meta = _train_lgb_lite(store, lite_path, start=start, end=end)
+    _write_meta(lite_path, lite_meta)
+    comparison["lgb_lite"] = {k: lite_meta.get(k) for k in ("kind", "ic", "rank_ic", "icir", "n_samples", "trained_on")}
+    qlib_meta: dict[str, Any] | None = None
+    if qlib_available():
+        try:
+            msg = _train_qlib(Path(qlib_dir), qlib_path)
+            qlib_meta = json.loads((qlib_path.with_name("lgb_alpha158.meta.json")).read_text(encoding="utf-8"))
+            qlib_meta["notes_msg"] = msg
+        except Exception as exc:  # noqa: BLE001
+            comparison["notes"].append(f"pyqlib Alpha158 训练失败：{exc}")
+    else:
+        comparison["notes"].append("未安装 pyqlib，默认 lgb_lite")
+    if qlib_meta:
+        comparison["qlib_alpha158"] = {
+            k: qlib_meta.get(k) for k in ("kind", "ic", "rank_ic", "icir", "trained_on")
+        }
+        winner = pick_better(qlib_meta, lite_meta)
+    else:
+        winner = lite_meta
+    winner = dict(winner)
+    winner["selected"] = True
+    winner["comparison"] = comparison
+    selected_path = models_dir / "selected.pkl"
+    src = Path(winner.get("path") or lite_path)
+    if src.is_file():
+        selected_path.write_bytes(src.read_bytes())
+        winner["path"] = str(selected_path)
+    _write_meta(selected_path, winner)
+    (models_dir / "comparison.json").write_text(
+        json.dumps(comparison, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return winner
 
 
 def _write_meta(model_path: Path, meta: dict[str, Any]) -> None:
@@ -357,7 +470,22 @@ def predict_scores(
         pred = model.predict(X)
         series = pd.Series(pred, index=feats.index)
     else:
-        return {}
+        lite = None
+        if models_dir is not None:
+            lite_path = Path(models_dir) / "lgb_lite.pkl"
+            if lite_path.is_file():
+                try:
+                    with lite_path.open("rb") as fh:
+                        lite = pickle.load(fh)
+                except Exception:
+                    lite = None
+        if not (isinstance(lite, dict) and lite.get("kind") == "lgb_lite"):
+            return {}
+        model = lite["model"]
+        cols = lite.get("features") or FEATURE_NAMES
+        X = feats.reindex(columns=cols)
+        pred = model.predict(X)
+        series = pd.Series(pred, index=feats.index)
     series = series.replace([np.inf, -np.inf], np.nan).dropna()
     if series.empty:
         return {}

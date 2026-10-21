@@ -435,6 +435,87 @@ def daily_cmd(
         typer.echo(f"已写入 {path}", err=True)
 
 
+@app.command("run-daily")
+def run_daily_cmd(
+    ctx: typer.Context,
+    date_text: Optional[str] = typer.Option(None, "--date", help="截面日 YYYY-MM-DD"),
+    force: bool = typer.Option(False, "--force", help="非交易日也跑"),
+    skip_sync: bool = typer.Option(False, "--skip-sync"),
+    skip_train: bool = typer.Option(False, "--skip-train"),
+) -> None:
+    """一条命令：增量同步 → 新闻宏观 → daily → 精简摘要。非交易日退出 0。"""
+    import time
+
+    from zhiku.calendar import is_trading_day
+    from zhiku.data.store import MarketStore
+    from zhiku.data.sync import sync_market
+    from zhiku.factors.qlib_adapter import needs_retrain, prepare_from_store, train_and_select
+    from zhiku.models import Market
+    from zhiku.pipeline.daily import run_daily, write_daily_reports
+    from zhiku.pipeline.settings import load_pipeline_settings
+
+    paths: Paths = ctx.obj["paths"]
+    paths.ensure_runtime_dirs()
+    on = _parse_date(date_text)
+    if not force and not is_trading_day(Market.CN, on):
+        typer.echo(f"非交易日 {on}，跳过。", err=True)
+        raise typer.Exit(0)
+    settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
+    timings: dict[str, float] = {}
+    t_all = time.monotonic()
+    store = MarketStore(paths.data_dir)
+    if not skip_sync:
+        t0 = time.monotonic()
+        typer.echo("== 增量同步 ==", err=True)
+        report = sync_market(
+            store,
+            universe=settings.data.universe,
+            years=settings.data.years,
+            resume=True,
+            incremental=True,
+            lookback_days=settings.data.incremental_lookback_days,
+            include_global=False,
+            extra_symbols=settings.data.extra_symbols,
+            sleep=settings.data.sleep_seconds,
+            retries=settings.data.retries,
+            workers=4,
+            detail_financials=settings.data.detail_financials,
+            progress=lambda m: typer.echo(m, err=True),
+        )
+        timings["sync"] = time.monotonic() - t0
+        typer.echo(report.summary(), err=True)
+    if not skip_train:
+        t0 = time.monotonic()
+        meta = __import__("zhiku.factors.qlib_adapter", fromlist=["model_status"]).model_status(
+            paths.models_dir
+        )
+        if needs_retrain(meta, on):
+            typer.echo("== 月度重训 ==", err=True)
+            try:
+                prepare_from_store(store, paths.data_dir / "qlib")
+                train_and_select(qlib_dir=paths.data_dir / "qlib", models_dir=paths.models_dir, store=store)
+            except Exception as exc:  # noqa: BLE001
+                typer.echo(f"训练跳过：{exc}", err=True)
+        else:
+            typer.echo(f"模型本月已训 {meta.get('trained_on')}，跳过重训", err=True)
+        timings["train"] = time.monotonic() - t0
+    t0 = time.monotonic()
+    typer.echo("== daily ==", err=True)
+    daily = run_daily(paths, on, provider_kind=ctx.obj["provider_kind"])
+    written = write_daily_reports(paths, on, daily)
+    timings["daily"] = time.monotonic() - t0
+    timings["total"] = time.monotonic() - t_all
+    for key, sec in timings.items():
+        typer.echo(f"耗时 {key}={sec:.1f}s", err=True)
+        daily.notes.append(f"耗时 {key}={sec:.1f}s")
+    brief = next((p for p in written if p.name.endswith("zk-brief.md")), None)
+    if brief is not None:
+        typer.echo(brief.read_text(encoding="utf-8"))
+    for path in written:
+        typer.echo(f"已写入 {path}", err=True)
+    raise typer.Exit(0)
+
+
 @app.command("ui")
 def ui_cmd(
     port: int = typer.Option(8501, "--port"),
@@ -494,15 +575,20 @@ def factor_train(
 ) -> None:
     """训练 Alpha158 + LightGBM（pyqlib 失败则 pandas+LightGBM）。"""
     from zhiku.data.store import MarketStore
-    from zhiku.factors.qlib_adapter import QlibNotInstalled, train_model
+    from zhiku.factors.qlib_adapter import QlibNotInstalled, train_and_select
 
     paths: Paths = ctx.obj["paths"]
     paths.ensure_runtime_dirs()
     dest = qlib_dir or (paths.data_dir / "qlib")
-    model_path = model or (paths.models_dir / "lgb_alpha158.pkl")
     store = MarketStore(paths.data_dir)
+    del model  # 对比训练写入 models/selected.pkl
     try:
-        msg = train_model(qlib_dir=dest, model_path=model_path, store=store)
+
+        winner = train_and_select(qlib_dir=dest, models_dir=paths.models_dir, store=store)
+        msg = (
+            f"已训练并选定 {winner.get('kind')}；"
+            f"IC={winner.get('ic')} RankIC={winner.get('rank_ic')} ICIR={winner.get('icir')}"
+        )
     except QlibNotInstalled as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from None
@@ -601,6 +687,7 @@ def data_sync(
     max_symbols: Optional[int] = typer.Option(None, "--max-symbols", help="调试上限"),
     include_global: Optional[bool] = typer.Option(None, "--include-global/--skip-global"),
     workers: int = typer.Option(4, "--workers", help="日线并行数（baostock 子进程）"),
+    incremental: bool = typer.Option(False, "--incremental/--full", help="只拉 last_ok 前几天"),
 ) -> None:
     """增量同步 A 股列表/成分/日线/财报到 ZHIKU_KB/data。可断点续传。"""
     from zhiku.data.store import MarketStore
@@ -627,6 +714,9 @@ def data_sync(
         sleep=sleep if sleep is not None else ds.sleep_seconds,
         retries=ds.retries,
         workers=workers,
+        incremental=incremental,
+        lookback_days=ds.incremental_lookback_days,
+        detail_financials=ds.detail_financials,
         progress=lambda m: typer.echo(m, err=True),
     )
     typer.echo(report.summary())

@@ -12,6 +12,7 @@ from zhiku.data.codes import infer_market, is_cn_etf
 from zhiku.data.compute import (
     attach_percentiles,
     consecutive_div_years,
+    dividend_yield_from_rows,
     missing_ratio,
     snapshot_from_store,
 )
@@ -150,24 +151,10 @@ def build_fundamentals(
                 except ValueError:
                     continue
         spot = spots.get(symbol)
-        mktcap = None if not spot else spot.get("mktcap")
-        # 股息率：最近一年分红金额 / 市值。缺一则 None。
-        div_yield = None
-        if mktcap and ex_dates:
-            year_amt = 0.0
-            have = False
-            for _, drow in div_df.iterrows():
-                try:
-                    ex = date.fromisoformat(str(drow["ex_date"])[:10])
-                except ValueError:
-                    continue
-                if asof.year - 1 <= ex.year <= asof.year and drow.get("amount") is not None:
-                    year_amt += float(drow["amount"])
-                    have = True
-            if have and float(mktcap) > 0:
-                # fhps 派息常为每股；若数值很小按每股*股本无法取得，保持缺数据
-                if year_amt > 1:  # 更像合计金额
-                    div_yield = year_amt / float(mktcap)
+        raw_last = None
+        if raw_closes is not None and not raw_closes.dropna().empty:
+            raw_last = float(raw_closes.dropna().astype(float).iloc[-1])
+        div_yield = dividend_yield_from_rows(div_df, asof, raw_close=raw_last)
         market = infer_market(symbol)
         row = snapshot_from_store(
             symbol=symbol,

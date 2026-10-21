@@ -112,6 +112,9 @@ class MarketFetcher:
     def bulk_dividends(self, period: date) -> list[dict] | MissingData:
         return MissingData("未提供整表分红")
 
+    def cn_statement_detail(self, symbol: str) -> list[dict] | MissingData:
+        return MissingData("未提供明细财务", symbol=symbol)
+
 
 _EM_HIST_FAILS = 0
 _EM_HIST_SKIP_AFTER = 3
@@ -388,6 +391,7 @@ class AkshareFetcher(MarketFetcher):
         ex_col = _col(raw, "除权除息日", "除息日", "ex_date")
         ann_col = _col(raw, "预案公告日", "最新公告日期", "公告日期", "announced")
         amt_col = _col(raw, "现金分红-现金分红比例", "现金分红", "派息", "amount")
+        yield_col = _col(raw, "现金分红-股息率", "股息率", "yield")
         if code_col is None or ex_col is None:
             return MissingData("整表分红缺代码或除权日")
         rows: list[dict] = []
@@ -401,6 +405,7 @@ class AkshareFetcher(MarketFetcher):
                     "ex_date": ex,
                     "announced": _as_date(row[ann_col]) if ann_col else ex,
                     "amount": _num(row[amt_col]) if amt_col else None,
+                    "yield": _num(row[yield_col]) if yield_col else None,
                 }
             )
         return rows or MissingData(f"整表分红无行 {period}")
@@ -418,6 +423,44 @@ class AkshareFetcher(MarketFetcher):
         if isinstance(raw, MissingData):
             return raw
         return _statements_from_df(normalize_cn(symbol), kind, raw)
+
+    def cn_statement_detail(self, symbol: str) -> list[dict] | MissingData:
+        """新浪三大表；失败再试 tushare。baostock 季频只作比率补充。"""
+        from zhiku.data.detail_fin import map_sina_statement, sina_stock
+
+        code = normalize_cn(symbol)
+        stock = sina_stock(code)
+        rows: list[dict] = []
+        errors: list[str] = []
+        for kind, sheet in {
+            "income": "利润表",
+            "balance": "资产负债表",
+            "cashflow": "现金流量表",
+        }.items():
+            raw = self._ak(
+                ["stock_financial_report_sina"],
+                stock=stock,
+                symbol=sheet,
+                md_symbol=code,
+                field=f"sina:{kind}",
+            )
+            if isinstance(raw, MissingData):
+                errors.append(f"{sheet}:{raw.reason}")
+                continue
+            mapped = map_sina_statement(code, kind, raw)
+            if isinstance(mapped, MissingData):
+                errors.append(f"{sheet}:{mapped.reason}")
+                continue
+            rows.extend(mapped)
+        if rows:
+            return rows
+        ts = _tushare_statements(code)
+        if not isinstance(ts, MissingData):
+            return ts
+        return MissingData(
+            "未提供明细财务: " + ("; ".join(errors) or "新浪三大表为空"),
+            symbol=code,
+        )
 
     def cn_dividends(self, symbol: str) -> list[dict] | MissingData:
         code = normalize_cn(symbol)
@@ -857,3 +900,75 @@ def tushare_bars(symbol: str, start: date, end: date, adjust: str) -> pd.DataFra
     }
     df = df.rename(columns=rename)
     return _normalize_cn_bars(code, df, adjust=adjust)
+
+
+def _tushare_statements(symbol: str) -> list[dict] | MissingData:
+    token = os.environ.get("TUSHARE_TOKEN") or os.environ.get("TUSHARE_PRO_TOKEN")
+    if not token:
+        return MissingData("未配置 TUSHARE_TOKEN", symbol=symbol)
+    try:
+        import tushare as ts
+    except Exception as exc:  # noqa: BLE001
+        return MissingData(f"tushare 不可用: {exc}", symbol=symbol)
+    code = normalize_cn(symbol)
+    suffix = "SH" if code.startswith(("6", "9")) else "SZ"
+    ts_code = f"{code}.{suffix}"
+    try:
+        pro = ts.pro_api(token)
+    except Exception as exc:  # noqa: BLE001
+        return MissingData(f"tushare 登录失败: {exc}", symbol=symbol)
+    from zhiku.data.detail_fin import merge_payload
+
+    kind_api = {
+        "income": ("income", {"operate_profit": "营业利润", "n_income": "净利润", "revenue": "营业总收入", "int_exp": "利息费用", "total_profit": "利润总额"}),
+        "balance": (
+            "balancesheet",
+            {
+                "total_cur_assets": "流动资产合计",
+                "total_cur_liab": "流动负债合计",
+                "fix_assets": "固定资产净额",
+                "money_cap": "货币资金",
+                "st_borr": "短期借款",
+                "lt_borr": "长期借款",
+                "total_assets": "资产总计",
+                "total_liab": "负债合计",
+                "total_hldr_eqy_exc_min_int": "股东权益合计",
+            },
+        ),
+        "cashflow": ("cashflow", {"n_cashflow_act": "经营活动产生的现金流量净额"}),
+    }
+    rows: list[dict] = []
+    for kind, (api, mapping) in kind_api.items():
+        fn = getattr(pro, api, None)
+        if fn is None:
+            continue
+        try:
+            df = fn(ts_code=ts_code)
+        except Exception:
+            continue
+        if df is None or getattr(df, "empty", True):
+            continue
+        for _, raw in df.iterrows():
+            period = _as_date(raw.get("end_date"))
+            announced = _as_date(raw.get("ann_date") or raw.get("f_ann_date"))
+            if period is None:
+                continue
+            payload: dict = {}
+            for src, dest in mapping.items():
+                val = _num(raw.get(src))
+                if val is not None:
+                    payload[dest] = val
+            if not payload:
+                continue
+            rows.append(
+                {
+                    "symbol": code,
+                    "kind": kind,
+                    "period": period,
+                    "announced": announced or period,
+                    "announced_is_period": announced is None,
+                    "payload": merge_payload({}, payload),
+                    "source": "tushare",
+                }
+            )
+    return rows or MissingData("tushare 财报为空", symbol=symbol)

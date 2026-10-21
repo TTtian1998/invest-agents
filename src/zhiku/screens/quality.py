@@ -73,6 +73,37 @@ def apply_quality(
     return QualityResult(row.symbol, passed=not reasons, reasons=reasons)
 
 
+def apply_tradable(row: Fundamentals, universe: UniverseSettings) -> QualityResult:
+    """经典公式用的可交易过滤：ST/ETF/市值/流动性。缺 PE/ROE 不挡。"""
+    reasons: list[str] = []
+    if universe.exclude_etf and row.instrument == "etf":
+        return QualityResult(row.symbol, False, ["ETF/基金不参与个股选股"])
+    if universe.exclude_st and (row.st or row.delist_risk):
+        return QualityResult(row.symbol, False, ["ST 或退市风险"])
+    mktcap_yi = None if row.mktcap_cny is None else row.mktcap_cny / 1e8
+    if mktcap_yi is not None and mktcap_yi < universe.min_mktcap_yi:
+        reasons.append(f"小市值 {mktcap_yi:.1f} 亿 < {universe.min_mktcap_yi}")
+    amount = row.amount_cny
+    min_amt = universe.min_amount(row.market)
+    if amount is not None and amount < min_amt:
+        reasons.append(f"日均成交额 {amount:.0f} < {min_amt:.0f}")
+    return QualityResult(row.symbol, passed=not reasons, reasons=reasons)
+
+
+def filter_tradable(
+    rows: list[Fundamentals],
+    universe: UniverseSettings,
+) -> tuple[list[Fundamentals], list[QualityResult]]:
+    passed: list[Fundamentals] = []
+    results: list[QualityResult] = []
+    for row in rows:
+        q = apply_tradable(row, universe)
+        results.append(q)
+        if q.passed:
+            passed.append(row)
+    return passed, results
+
+
 def filter_universe(
     rows: list[Fundamentals],
     quality: QualitySettings,

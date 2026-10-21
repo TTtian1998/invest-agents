@@ -45,7 +45,7 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "lt_debt": ("长期借款", "Long Term Debt", "LONG_LOAN"),
     "bonds": ("应付债券", "Bonds Payable", "BOND_PAYABLE"),
     "current_lt": ("一年内到期的非流动负债", "Current Portion Of Long Term Debt"),
-    "fixed_assets": ("固定资产", "Net PPE", "FIXED_ASSET", "固定资产净值"),
+    "fixed_assets": ("固定资产净额", "固定资产净值", "固定资产", "Net PPE", "FIXED_ASSET"),
     "total_assets": ("资产总计", "Total Assets", "TOTAL_ASSETS"),
     "total_liab": ("负债合计", "Total Liab", "TOTAL_LIABILITIES", "负债总计"),
     "equity": ("股东权益合计", "Stockholders Equity", "TOTAL_EQUITY", "所有者权益合计"),
@@ -155,6 +155,56 @@ def gross_margin_of(income: dict[str, Any] | None) -> float | None:
     if rev is None or cogs is None or rev == 0:
         return None
     return (rev - cogs) / rev
+
+
+def dividend_yield_from_rows(
+    div_df: pd.DataFrame,
+    asof: date,
+    *,
+    raw_close: float | None = None,
+) -> float | None:
+    """优先用整表「现金分红-股息率」；否则 每10股派息/10 / 未复权收盘。
+
+    旧实现把「每10股派 X 元」当成全年现金总额 / 市值，CSI800 会几乎全空。
+    """
+    if div_df is None or getattr(div_df, "empty", True):
+        return None
+    stored: list[float] = []
+    year_dps = 0.0
+    have_amt = False
+    if "yield" in div_df.columns:
+        for _, drow in div_df.iterrows():
+            try:
+                ex = date.fromisoformat(str(drow["ex_date"])[:10])
+            except (ValueError, TypeError):
+                continue
+            if ex > asof or not (asof.year - 1 <= ex.year <= asof.year):
+                continue
+            y = _to_float(drow.get("yield"))
+            if y is None:
+                continue
+            if y > 1:
+                y = y / 100.0
+            if 0 < y < 0.5:
+                stored.append(y)
+    if stored:
+        return float(sum(stored) / len(stored)) if len(stored) > 1 else stored[0]
+    for _, drow in div_df.iterrows():
+        try:
+            ex = date.fromisoformat(str(drow["ex_date"])[:10])
+        except (ValueError, TypeError):
+            continue
+        if asof.year - 1 <= ex.year <= asof.year and drow.get("amount") is not None:
+            amt = _to_float(drow.get("amount"))
+            if amt is None:
+                continue
+            year_dps += amt / 10.0  # fhps 现金分红比例 = 每10股派息
+            have_amt = True
+    if have_amt and raw_close is not None and raw_close > 0:
+        y = year_dps / float(raw_close)
+        if 0 < y < 0.5:
+            return y
+    return None
 
 
 def consecutive_div_years(ex_dates: list[date], asof: date) -> int | None:

@@ -5,6 +5,11 @@ from __future__ import annotations
 from zhiku.macro.models import ANCHOR_ASSETS, AnchorSnapshot
 
 
+def snapshots_from_live(raw: dict | None) -> list[AnchorSnapshot]:
+    """live 价量。缺的资产写缺数据，不拿 fixture 补。"""
+    return snapshots_from_raw({"assets": raw or {}})
+
+
 def snapshots_from_raw(raw: dict | None) -> list[AnchorSnapshot]:
     data = (raw or {}).get("assets") if isinstance(raw, dict) else None
     data = data or {}

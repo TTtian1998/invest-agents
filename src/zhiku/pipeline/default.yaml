@@ -22,18 +22,22 @@ greenblatt:
   # Joel Greenblatt《The Little Book That Beats the Market》：ROC + Earnings Yield 排名合成
   top_n: 30
   min_score: 0
+  require_quality: false   # 经典公式只用可交易过滤，不套 ROE/PE 质量门槛
 
 piotroski:
   # Piotroski (2000) F-Score，9 项
   min_score: 7
   top_n: 30
+  require_quality: false
 
 dividend:
+  # 连续三年 + 截面分位 + 股息率，全部可配；过严会空篮子
   pe_percentile_max: 0.40
   pb_percentile_max: 0.40
   min_yield: 0.03
   min_consecutive_years: 3
   top_n: 30
+  require_quality: false
 
 multifactor:
   weights:
@@ -43,6 +47,7 @@ multifactor:
     momentum_12_1: 0.25
     low_vol: 0.15
   top_n: 30
+  require_quality: true
 
 merge:
   formula: 0.6
@@ -99,10 +104,18 @@ news:
     twitter: true
     official_rss: true
     edgar: true
+  rss_feeds:
+    - https://www.cnbc.com/id/100003114/device/rss/rss.html
+    - https://feeds.reuters.com/reuters/businessNews
+    - https://www.caixin.com/rss/latest.xml
+    - https://www.yicai.com/rss/news.xml
   official_feeds:
     fed: https://www.federalreserve.gov/feeds/press_all.xml
     bls: https://www.bls.gov/feed/bls_latest.rss
+    bea: https://www.bea.gov/rss.xml
     ecb: https://www.ecb.europa.eu/rss/press.html
+    pbc: http://www.pbc.gov.cn/goutongjiaoliu/113456/113469/11040/index1.html
+    stats_cn: https://www.stats.gov.cn/sj/zxfb/rss.xml
   x_accounts_file: config/x_accounts.yaml
   x_max_posts: 8
   x_lookback_hours: 36
@@ -136,6 +149,8 @@ data:
   hk_lists: [hsi, hstech]
   us_lists: [sp500, ndx]
   extra_symbols: ["510300"]   # 沪深300ETF，回测基准；不含持仓信息
+  incremental_lookback_days: 2
+  detail_financials: true
 
 events:
   enabled: true

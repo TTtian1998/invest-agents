@@ -216,6 +216,14 @@ def write_daily_reports(paths: Paths, on: date, daily: DailyResult) -> list[Path
     latest = paths.reports / "latest-daily.json"
     latest.write_text(payload, encoding="utf-8")
     written = [md_path, html_path, json_path, latest]
+    brief_md = render("daily_brief.md.j2", daily=daily)
+    lines = brief_md.splitlines()
+    if len(lines) > 150:
+        brief_md = "\n".join(lines[:150]) + "\n"
+    brief_path = write_report(paths.reports, on, "brief", brief_md)
+    latest_brief = paths.reports / "latest-brief.md"
+    latest_brief.write_text(brief_md, encoding="utf-8")
+    written.extend([brief_path, latest_brief])
     from zhiku.macro.runner import MacroBundle, write_macro_reports
     from zhiku.news.runner import NewsBundle, write_news_reports
 
