@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import date
 
-import numpy as np
 import pandas as pd
 
 from zhiku.data.store import MarketStore
@@ -17,14 +16,13 @@ from zhiku.factors.dataset import (
     label_open_horizon,
     label_t2_close,
     load_fund_features,
+    make_ch_features,
     neutralize,
     split_of,
 )
-from zhiku.factors.dataset import make_ch_features
 from zhiku.factors.experiment import (
     BASELINE,
     CANDIDATES,
-    ExperimentConfig,
     ExperimentResult,
     changed_fields,
     decide_keep,

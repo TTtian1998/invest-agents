@@ -187,6 +187,9 @@ def build_frame(
     score_syms, membership = cache.universe(store, asof)
     feats = cache.features(store, cfg, asof)
     y = cache.label(store, cfg, asof)
+    if feats.empty or y.empty:
+        empty = pd.DataFrame()
+        return empty, pd.Series(dtype=object), pd.Series(dtype=float), membership
     data = feats.join(y, how="inner")
     data = data[data["label"].notna()]
     data = data.loc[:, ~data.columns.duplicated()]
@@ -651,15 +654,50 @@ def run_ablation(
     by_name: dict[str, ExperimentResult] = {}
     rows: list[ExperimentResult] = []
     out = Path(out_dir) if out_dir else None
+    done: set[str] = set()
+    if out and (out / "ablation.json").is_file():
+        try:
+            prev = json.loads((out / "ablation.json").read_text(encoding="utf-8"))
+            for raw in prev.get("results") or []:
+                if raw.get("name") and (raw.get("valid") or raw.get("notes")):
+                    res = ExperimentResult(
+                        name=raw["name"],
+                        n_train=int(raw.get("n_train") or 0),
+                        n_valid=int(raw.get("n_valid") or 0),
+                        n_test=int(raw.get("n_test") or 0),
+                        valid=raw.get("valid") or {},
+                        test={},  # 续跑仍不得带出上次误写的测试集
+                        top30=raw.get("top30") or {},
+                        kept=bool(raw.get("kept")),
+                        notes=list(raw.get("notes") or []),
+                        changed=list(raw.get("changed") or []),
+                    )
+                    by_name[res.name] = res
+                    rows.append(res)
+                    done.add(res.name)
+        except (OSError, TypeError, json.JSONDecodeError, KeyError):
+            done = set()
+            by_name = {}
+            rows = []
 
-    base_res, _, _ = run_one(store, BASELINE, asof=asof, report_splits=("valid",), cache=cache)
-    by_name[BASELINE.name] = base_res
-    rows.append(base_res)
-    if out:
-        _write_log(out, rows)
+    if BASELINE.name not in done:
+        base_res, _, _ = run_one(store, BASELINE, asof=asof, report_splits=("valid",), cache=cache)
+        by_name[BASELINE.name] = base_res
+        rows.append(base_res)
+        if out:
+            _write_log(out, rows)
+            (out / "ablation.json").write_text(
+                json.dumps({"results": [r.to_dict() for r in rows], "n_experiments": len(rows), "test_looks": 0}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+    base_res = by_name[BASELINE.name]
 
     kept_cfgs: list[ExperimentConfig] = []
     for cfg in CANDIDATES:
+        if cfg.name in done:
+            if by_name[cfg.name].kept:
+                kept_cfgs.append(cfg)
+            continue
         parent_cfg = BASELINE
         parent_res = base_res
         if cfg.versus and cfg.versus in by_name:
@@ -679,11 +717,23 @@ def run_ablation(
         rows.append(res)
         if out:
             _write_log(out, rows)
+            (out / "ablation.json").write_text(
+                json.dumps(
+                    {"results": [r.to_dict() for r in rows], "n_experiments": len(rows), "test_looks": 0},
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
 
     combo = None
     combo_res = None
     pred = model = None
-    if kept_cfgs:
+    if "combo_winners" in done:
+        combo_res = by_name.get("combo_winners")
+        if kept_cfgs:
+            combo = _combo_from(kept_cfgs)
+    elif kept_cfgs:
         combo = _combo_from(kept_cfgs)
         combo_res, pred, model = run_one(
             store, combo, asof=asof, report_splits=("valid",), cache=cache
@@ -705,6 +755,14 @@ def run_ablation(
         locked = combo
 
     test_payload = None
+    if peek_test and out and (out / "ablation.json").is_file():
+        try:
+            prev_full = json.loads((out / "ablation.json").read_text(encoding="utf-8"))
+            if prev_full.get("test_looks") == 1 and prev_full.get("test"):
+                test_payload = prev_full["test"]
+                peek_test = False
+        except (OSError, json.JSONDecodeError):
+            pass
     if peek_test:
         test_rows = []
         for cfg in (BASELINE, locked):

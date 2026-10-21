@@ -263,46 +263,42 @@ def load_fund_features(store: MarketStore, symbols: list[str], calendar: Iterabl
 
     snaps: list[dict[str, Any]] = []
     if not stmts.empty:
-        for (symbol, announced), g in stmts.groupby(["symbol", "announced"]):
-            if pd.isna(announced):
-                continue
-            by_kind = {}
-            for _, row in g.iterrows():
-                try:
-                    by_kind[str(row["kind"])] = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
-                except (TypeError, json.JSONDecodeError):
-                    continue
-            income = by_kind.get("income") or {}
-            balance = by_kind.get("balance") or {}
-            cash = by_kind.get("cashflow") or {}
-            ni = pick_num(income, "net_income")
-            equity = pick_num(balance, "equity")
-            roe = ratio(ni, equity)
-            gm = None
-            rev = pick_num(income, "revenue")
-            cogs = pick_num(income, "cogs")
-            if rev is not None and cogs is not None and rev != 0:
-                gm = (rev - cogs) / rev
-            ocf = pick_num(cash, "ocf")
-            ocf_ni = ratio(ocf, ni) if ni not in (None, 0) else None
-            debt = ratio(pick_num(balance, "total_liab"), pick_num(balance, "total_assets"))
-            rev_yoy = _yoy(income)
-            eps = pick_num(income, "eps")
-            bps = pick_num(income, "bps")
-            snaps.append(
-                {
-                    "symbol": str(symbol),
-                    "announced": pd.Timestamp(announced),
-                    "f_roe": roe,
-                    "f_gm": gm,
-                    "f_ocf_ni": ocf_ni,
-                    "f_debt": debt,
-                    "f_rev_yoy": rev_yoy,
-                    "f_eps": eps,
-                    "f_bps": bps,
-                    "f_equity": equity,
-                }
-            )
+        work = stmts.dropna(subset=["announced"]).copy()
+        work["announced"] = pd.to_datetime(work["announced"])
+        work = work.sort_values(["symbol", "announced"])
+        for symbol, part in work.groupby("symbol"):
+            latest: dict[str, dict[str, Any]] = {}
+            for announced, day in part.groupby("announced"):
+                for _, row in day.iterrows():
+                    try:
+                        payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
+                    except (TypeError, json.JSONDecodeError):
+                        continue
+                    if isinstance(payload, dict):
+                        latest[str(row["kind"])] = payload
+                income = latest.get("income") or {}
+                balance = latest.get("balance") or {}
+                cash = latest.get("cashflow") or {}
+                ni = pick_num(income, "net_income")
+                equity = pick_num(balance, "equity")
+                rev = pick_num(income, "revenue")
+                cogs = pick_num(income, "cogs")
+                gm = (rev - cogs) / rev if rev not in (None, 0) and cogs is not None else None
+                ocf = pick_num(cash, "ocf")
+                snaps.append(
+                    {
+                        "symbol": str(symbol),
+                        "announced": pd.Timestamp(announced),
+                        "f_roe": ratio(ni, equity),
+                        "f_gm": gm,
+                        "f_ocf_ni": ratio(ocf, ni) if ni not in (None, 0) else None,
+                        "f_debt": ratio(pick_num(balance, "total_liab"), pick_num(balance, "total_assets")),
+                        "f_rev_yoy": _yoy(income),
+                        "f_eps": pick_num(income, "eps"),
+                        "f_bps": pick_num(income, "bps"),
+                        "f_equity": equity,
+                    }
+                )
     snap_df = pd.DataFrame(snaps)
     rows = []
     for symbol in symbols:
@@ -416,12 +412,16 @@ def attach_industry_size(
 
 
 def _pivot(bars: pd.DataFrame, field: str) -> pd.DataFrame:
+    if bars is None or bars.empty or field not in bars.columns:
+        return pd.DataFrame()
     df = bars.copy()
     df["date"] = pd.to_datetime(df["date"])
     return df.pivot(index="date", columns="symbol", values=field).sort_index().astype(float)
 
 
 def _stack(panel: pd.DataFrame, name: str) -> pd.Series:
+    if panel is None or panel.empty:
+        return pd.Series(dtype=float, name=name)
     s = panel.stack()
     s.name = name
     s.index = s.index.set_names(["date", "symbol"])
