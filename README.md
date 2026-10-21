@@ -165,7 +165,7 @@ A 股全市场（`--universe all --resume`）仍在跑：约 10605/16642 次尝�
 
 分析层：有 `ZHIKU_LLM_KEY` 或 `OPENAI_API_KEY` 时走 LLM；没有 key 则规则模板，并标明「未做深度分析」。测试默认无 key。
 
-研判层（`docs/ai_layer.md`）：公式/量化初筛，AI 判断候选前 10。后端 `ZHIKU_LLM_BACKEND=auto|openai|mock|external`，兼容 DeepSeek/Qwen/本地（`ZHIKU_LLM_BASE_URL`）。无 key 时导出 `review-pack.json`，`zk ingest-review` 写回；`zk review-scorecard` 对账 T+5/T+20 超额。结论进 `journal/ai_decisions.jsonl`。
+研判层（`docs/ai_layer.md`）：公式/量化初筛，AI 判断候选前 10。后端 `ZHIKU_LLM_BACKEND=auto|openai|cursor|mock|external`。OpenAI 兼容走 `ZHIKU_LLM_KEY`；Cursor 走 `CURSOR_API_KEY` + `cursor-sdk`（local，失败再 Cloud Agents API）。无 key 时导出 `review-pack.json`，`zk ingest-review` 写回；`zk review-scorecard` 对账 T+5/T+20 超额。结论进 `journal/ai_decisions.jsonl`。密钥不进 git。
 
 ### 信源分级（YAML 可配）
 

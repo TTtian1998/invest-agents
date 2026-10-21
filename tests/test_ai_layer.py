@@ -25,6 +25,7 @@ RUNNER = CliRunner()
 def test_resolve_backend_auto_without_key(monkeypatch) -> None:
     monkeypatch.delenv("ZHIKU_LLM_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("CURSOR_API_KEY", raising=False)
     monkeypatch.delenv("ZHIKU_LLM_BACKEND", raising=False)
     assert resolve_backend("auto").name == "external"
     monkeypatch.setenv("ZHIKU_LLM_BACKEND", "mock")
@@ -239,3 +240,6 @@ def test_docs_state_lookahead() -> None:
     assert "Sarkar" in text and "Lopez-Lira" in text
     assert "TradingAgents" in text and "FinGPT" in text
     assert "review_pack.v1" in text
+    assert "CURSOR_API_KEY" in text
+    assert "cursor-sdk" in text
+    assert ("crs" + "r_") not in text

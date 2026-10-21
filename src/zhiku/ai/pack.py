@@ -122,25 +122,31 @@ def write_review_pack(path: Path, pack: dict[str, Any]) -> Path:
     return path
 
 
-def load_review_result(path: Path) -> ReviewResult:
-    raw = json.loads(path.read_text(encoding="utf-8"))
+def review_result_from_obj(raw: dict[str, Any]) -> ReviewResult:
     if not isinstance(raw, dict):
         raise ValueError("研判结果必须是 JSON 对象")
     schema = raw.get("schema") or raw.get("schema_name")
     if schema != RESULT_SCHEMA:
         raise ValueError(f"schema 应为 {RESULT_SCHEMA}，实际 {schema}")
-    raw = dict(raw)
-    for item in raw.get("judgments") or []:
+    payload = dict(raw)
+    for item in payload.get("judgments") or []:
         if isinstance(item, dict):
             if "long" in item and "long_case" not in item:
                 item["long_case"] = item["long"]
             if "short" in item and "short_case" not in item:
                 item["short_case"] = item["short"]
-    result = ReviewResult.model_validate(raw)
+    result = ReviewResult.model_validate(payload)
     for j in result.judgments:
         if not j.long_case and not j.short_case:
             raise ValueError(f"{j.symbol} 缺少带 cite 的多空主张")
     return result
+
+
+def load_review_result(path: Path) -> ReviewResult:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("研判结果必须是 JSON 对象")
+    return review_result_from_obj(raw)
 
 
 def result_from_parts(

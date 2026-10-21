@@ -40,12 +40,25 @@ Lopez-Lira & Tang 的结果不能直接当成「A 股该信动量」；LSY (2019
 
 | 变量 | 作用 |
 | --- | --- |
-| `ZHIKU_LLM_BACKEND` | `auto` / `openai` / `mock` / `external` |
-| `ZHIKU_LLM_KEY` 或 `OPENAI_API_KEY` | API key |
+| `ZHIKU_LLM_BACKEND` | `auto` / `openai` / `cursor` / `mock` / `external` |
+| `ZHIKU_LLM_KEY` 或 `OPENAI_API_KEY` | OpenAI 兼容接口的 key |
+| `CURSOR_API_KEY` | Cursor 后端专用（只读这个变量，不进仓库） |
 | `ZHIKU_LLM_BASE_URL` | OpenAI 兼容基址（DeepSeek、Qwen、本地 vLLM/Ollama 兼容层） |
-| `ZHIKU_LLM_MODEL` | 模型名，默认 `gpt-4o-mini` |
+| `ZHIKU_LLM_MODEL` | 模型名。openai 默认 `gpt-4o-mini`；cursor 默认 `composer-2.5` |
+| `ZHIKU_CURSOR_API_BASE` | Cloud Agents API 基址，默认 `https://api.cursor.com` |
+| `ZHIKU_CURSOR_TIMEOUT_SEC` | Cursor 超时秒数，默认 300 |
 
-`auto`：显式 `mock` 用模拟；有 key 走兼容接口；否则 `external`（只导出任务包）。
+`auto`：显式 `mock` 用模拟；有 `ZHIKU_LLM_KEY` / `OPENAI_API_KEY` 走 OpenAI 兼容；否则有 `CURSOR_API_KEY` 走 Cursor；否则 `external`（只导出任务包）。
+
+### Cursor 后端
+
+Cursor 没有 OpenAI 兼容的 `/v1/chat/completions`。`ZHIKU_LLM_BACKEND=cursor` 时：
+
+1. 优先用官方 Python 包 `cursor-sdk` 的 **local** 运行时：不需要本仓库，把 `export-review` 任务包放进 prompt，要求只返回 `zhiku.review_result.v1` JSON。
+2. SDK 未安装或本地运行时不可用时，退到 Cloud Agents API（`POST /v1/agents`，再按 run 轮询）。
+3. 解析失败或超时只报错，**不**退回规则模板冒充已经判断。
+
+本机需要：`pip install cursor-sdk`（或 `pip install -e ".[cursor]"`），以及 Cursor Dashboard 签发的用户/服务账号 key。把 key 写进环境变量 `CURSOR_API_KEY`，或复制 `.env.example` 为 `.env`（`.env` 已 gitignore）。日志会脱敏。仓库扫描禁止出现官方密钥前缀字符串。
 
 外部模式：
 

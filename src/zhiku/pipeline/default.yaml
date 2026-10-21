@@ -105,7 +105,7 @@ backtest:
 ai:
   top_n: 15
   judge_n: 10          # 研判只看候选前 10
-  backend: auto        # auto / openai / mock / external
+  backend: auto        # auto / openai / cursor / mock / external
   masters: [buffett, munger, graham, lynch, fisher, livermore, oneil, marks]
 
 news:

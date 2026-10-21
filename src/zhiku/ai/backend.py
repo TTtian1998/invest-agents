@@ -12,9 +12,15 @@ def llm_key() -> str | None:
     return os.environ.get("ZHIKU_LLM_KEY") or os.environ.get("OPENAI_API_KEY") or None
 
 
+def cursor_key() -> str | None:
+    from zhiku.ai.secrets import cursor_key as _cursor_key
+
+    return _cursor_key()
+
+
 def backend_name() -> str:
     raw = (os.environ.get("ZHIKU_LLM_BACKEND") or "auto").strip().lower()
-    if raw in {"auto", "openai", "mock", "external"}:
+    if raw in {"auto", "openai", "mock", "external", "cursor"}:
         return raw
     return "auto"
 
@@ -66,7 +72,7 @@ class OpenAICompatBackend:
             temperature=0,
         )
         text = (resp.choices[0].message.content or "").strip()
-        parsed = _parse_json_object(text)
+        parsed = parse_json_object(text)
         if parsed is None:
             raise RuntimeError("模型没有返回 JSON 对象")
         return parsed
@@ -84,15 +90,24 @@ class ExternalBackend:
 def resolve_backend(name: str | None = None) -> LLMBackend:
     chosen = (name or backend_name()).lower()
     if chosen == "auto":
-        if backend_name() == "mock" or os.environ.get("ZHIKU_LLM_BACKEND", "").lower() == "mock":
+        env = (os.environ.get("ZHIKU_LLM_BACKEND") or "").strip().lower()
+        if env == "mock":
             return MockBackend()
         if llm_key():
             return OpenAICompatBackend()
+        if cursor_key():
+            from zhiku.ai.cursor_backend import CursorBackend
+
+            return CursorBackend()
         return ExternalBackend()
     if chosen == "mock":
         return MockBackend()
     if chosen == "openai":
         return OpenAICompatBackend()
+    if chosen == "cursor":
+        from zhiku.ai.cursor_backend import CursorBackend
+
+        return CursorBackend()
     if chosen == "external":
         return ExternalBackend()
     raise ValueError(f"未知后端 {name}")
@@ -108,9 +123,17 @@ def _task_kind(system: str) -> str:
     return "unknown"
 
 
-def _parse_json_object(text: str) -> dict | None:
+def parse_json_object(text: str) -> dict | None:
     if not text:
         return None
+    fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, flags=re.S)
+    if fence:
+        try:
+            data = json.loads(fence.group(1))
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            pass
     try:
         data = json.loads(text)
         return data if isinstance(data, dict) else None
