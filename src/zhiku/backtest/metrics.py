@@ -327,6 +327,9 @@ def rebalance_equal_weight(
         fill_dt = snapped if fill == "decision_close" else _next_after(calendar, snapped)
         if fill_dt is None:
             continue
+        # 面板最后一根常有前复权混入，且没有再下一根验证，T+1 不用它成交
+        if fill != "decision_close" and fill_dt == calendar[-1]:
+            continue
         events.append((dt, fill_dt, keyed[dt]))
 
     if not events:

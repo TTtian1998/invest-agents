@@ -46,9 +46,9 @@ def test_asof_momentum_and_high_ignore_future_spike() -> None:
 
 
 def test_t1_open_fill_uses_next_open() -> None:
-    idx = pd.to_datetime(["2025-01-31", "2025-02-03", "2025-02-28", "2025-03-03"])
-    close = pd.DataFrame({"AAA": [10.0, 10.0, 10.0, 10.0]}, index=idx)
-    opens = pd.DataFrame({"AAA": [10.0, 10.0, 10.0, 12.0]}, index=idx)
+    idx = pd.to_datetime(["2025-01-31", "2025-02-03", "2025-02-28", "2025-03-03", "2025-03-04"])
+    close = pd.DataFrame({"AAA": [10.0, 10.0, 10.0, 10.0, 10.0]}, index=idx)
+    opens = pd.DataFrame({"AAA": [10.0, 10.0, 10.0, 12.0, 12.0]}, index=idx)
     picks = {pd.Timestamp("2025-01-31"): ["AAA"], pd.Timestamp("2025-02-28"): ["AAA"]}
     nav, turnover, extras = rebalance_equal_weight(
         close, picks, opens=opens, cost_bps=0, slippage_bps=0, fill="next_open"
@@ -119,6 +119,18 @@ def test_deflated_sharpe_haircut_grows_with_trials() -> None:
     assert many["sr0"] > one["sr0"]
     assert 0 < many["dsr_prob"] < 1
     assert expected_max_sr(9, 0.2) > expected_max_sr(2, 0.2)
+
+
+def test_next_open_skips_panel_last_bar() -> None:
+    idx = pd.to_datetime(["2025-01-31", "2025-02-03", "2025-02-28"])
+    close = pd.DataFrame({"AAA": [10.0, 11.0, 4.0]}, index=idx)
+    opens = pd.DataFrame({"AAA": [10.0, 10.0, 1.0]}, index=idx)
+    picks = {pd.Timestamp("2025-01-31"): ["AAA"], pd.Timestamp("2025-02-28"): ["AAA"]}
+    nav, _, extras = rebalance_equal_weight(
+        close, picks, opens=opens, cost_bps=0, slippage_bps=0, fill="next_open"
+    )
+    assert extras.get("n_rebals") == 1
+    assert pd.Timestamp("2025-02-28") not in nav.index
 
 
 def test_shift_trading_days_moves_along_calendar() -> None:

@@ -193,9 +193,14 @@ def run_daily(
             try:
                 from zhiku.backtest.pit_gate import evaluate_screens, load_statement_cache
 
+                from zhiku.backtest.engine import sanitize_mixed_adjust
+
                 opens = store.price_panel(list(prices.columns), field="open")
                 raw_px = store.price_panel(list(prices.columns), adjust="none", field="close")
                 amt_px = store.price_panel(list(prices.columns), field="amount")
+                if opens is not None and not opens.empty:
+                    opens = sanitize_mixed_adjust(opens, raw_px)
+                    opens = opens.reindex(prices.index)
                 cache = load_statement_cache(store, list(pit.all_symbols) if pit is not None else None)
                 pit_results = evaluate_screens(
                     settings,
