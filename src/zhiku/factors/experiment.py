@@ -681,6 +681,7 @@ def run_ablation(
             rows = []
 
     if BASELINE.name not in done:
+        print(f"[experiment] start {BASELINE.name}", flush=True)
         base_res, _, _ = run_one(store, BASELINE, asof=asof, report_splits=("valid",), cache=cache)
         by_name[BASELINE.name] = base_res
         rows.append(base_res)
@@ -707,10 +708,17 @@ def run_ablation(
                 parent_cfg = BASELINE
             elif cfg.versus == "freq_month":
                 parent_cfg = next(c for c in CANDIDATES if c.name == "freq_month")
+        print(f"[experiment] start {cfg.name} vs {parent_cfg.name}", flush=True)
         res, _, _ = run_one(
             store, cfg, asof=asof, report_splits=("valid",), cache=cache, parent=parent_cfg
         )
         res.kept = decide_keep(parent_res, res)
+        xs = ((res.valid or {}).get("t20_xs") or {})
+        print(
+            f"[experiment] done {cfg.name} keep={res.kept} "
+            f"RankIC={xs.get('rank_ic')} RankICIR={xs.get('rank_icir')} Q5-Q1={xs.get('q5_q1')}",
+            flush=True,
+        )
         if res.kept:
             kept_cfgs.append(cfg)
         by_name[cfg.name] = res
@@ -735,6 +743,7 @@ def run_ablation(
             combo = _combo_from(kept_cfgs)
     elif kept_cfgs:
         combo = _combo_from(kept_cfgs)
+        print(f"[experiment] start {combo.name}", flush=True)
         combo_res, pred, model = run_one(
             store, combo, asof=asof, report_splits=("valid",), cache=cache
         )
@@ -768,6 +777,7 @@ def run_ablation(
         for cfg in (BASELINE, locked):
             if cfg is None:
                 continue
+            print(f"[experiment] test-once {cfg.name}", flush=True)
             tres, tpred, tmodel = run_one(
                 store, cfg, asof=asof, report_splits=("test",), cache=cache, parent=BASELINE
             )
@@ -833,3 +843,7 @@ def main() -> None:
     asof = date.fromisoformat(args.asof) if args.asof else now_shanghai().date()
     run_ablation(store, asof=asof, out_dir=Path(args.out), models_dir=paths.models_dir)
     del os
+
+
+if __name__ == "__main__":
+    main()
