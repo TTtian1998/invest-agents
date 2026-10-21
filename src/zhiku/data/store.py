@@ -216,8 +216,12 @@ class MarketStore:
         key = _iso(asof)
         rows = [(index_code, s, key) for s in symbols]
         with _connect(self.sqlite_path) as conn:
+            conn.execute(
+                "DELETE FROM index_members WHERE index_code=? AND asof=?",
+                (index_code, key),
+            )
             conn.executemany(
-                "INSERT OR REPLACE INTO index_members(index_code, symbol, asof) VALUES (?,?,?)",
+                "INSERT INTO index_members(index_code, symbol, asof) VALUES (?,?,?)",
                 rows,
             )
         return len(rows)

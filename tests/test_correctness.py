@@ -184,6 +184,19 @@ def test_pit_membership_drops_future_members() -> None:
     assert float(nav_pit.iloc[-1]) < 1.15
 
 
+def test_membership_filters_picks_does_not_expand() -> None:
+    idx = pd.to_datetime(["2024-01-31", "2024-02-29", "2024-03-31"])
+    prices = pd.DataFrame(
+        {"AAA": [1.0, 1.0, 1.0], "BBB": [1.0, 1.5, 2.0]},
+        index=idx,
+    )
+    membership = {idx[0]: ["AAA", "BBB"], idx[1]: ["AAA", "BBB"], idx[2]: ["AAA", "BBB"]}
+    nav, _ = monthly_equal_weight(
+        prices, ["AAA"], cost_bps=0, slippage_bps=0, membership=membership
+    )
+    assert abs(float(nav.iloc[-1]) - 1.0) < 1e-9
+
+
 def test_pit_universe_does_not_backfill_today_members(tmp_path) -> None:
     store = MarketStore(tmp_path / "data")
     store.upsert_listings(

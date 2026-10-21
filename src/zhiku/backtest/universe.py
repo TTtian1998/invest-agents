@@ -79,7 +79,8 @@ def ensure_index_member_history(
     notes: list[str] = []
     if fetcher is None or not dates:
         return 0, notes
-    missing = [d for d in dates if len(store.index_symbols(index_code, d)) < 50]
+    min_n = 700 if index_code in {"000906", "csi800"} else 50
+    missing = [d for d in dates if len(store.index_symbols(index_code, d)) < min_n]
     if not missing:
         return 0, notes
     from zhiku.data.fetchers import baostock_index_members_hist

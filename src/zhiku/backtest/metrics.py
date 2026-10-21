@@ -146,9 +146,6 @@ def monthly_equal_weight(
     px.index = pd.to_datetime(px.index)
     px = px.sort_index()
     cols = [c for c in picks if c in px.columns]
-    if membership:
-        extra = [s for v in membership.values() for s in v if s in px.columns]
-        cols = list(dict.fromkeys(list(cols) + extra))
     if not cols:
         return pd.Series(dtype=float), 0.0
     month_ends = px.resample("ME").last().dropna(how="all")
