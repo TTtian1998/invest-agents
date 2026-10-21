@@ -228,6 +228,18 @@ def test_conference_not_window_and_fomc_core() -> None:
     assert ev is not None
     assert ev.importance <= 2
     assert ev.event_type in {"CONFERENCE", "OTHER"}
+    regional = parse_ws_calendar_row(
+        {"时间": "2026-10-27 22:00", "地区": "美国", "事件": "10月里士满联储制造业指数", "重要性": "高"},
+        asof=date(2026, 10, 27),
+        index=1,
+    )
+    assert regional is not None and regional.event_type != "FOMC"
+    idn = parse_ws_calendar_row(
+        {"时间": "2026-10-21 15:20", "地区": "印尼", "事件": "印尼央行公布利率决议", "重要性": "高"},
+        asof=date(2026, 10, 21),
+        index=2,
+    )
+    assert idn is not None and idn.event_type == "OTHER"
     settings = load_pipeline_settings()
     windows = build_windows([ev], settings.macro)
     assert windows == []

@@ -214,11 +214,11 @@ def _is_conference_noise(name: str) -> bool:
 
 
 def official_core_events(on: date, horizon_days: int = 7) -> list[MacroEvent]:
-    """公开日程补充：美联储例会等。不是预测，只填日历缺口。"""
-    from datetime import datetime, timedelta
-    from zoneinfo import ZoneInfo
+    """公开日程补充：美联储例会等。按上海日历日挂牌，保证未来 7 天能看见会期。"""
+    from datetime import datetime, time, timedelta
 
-    et = ZoneInfo("America/New_York")
+    from zhiku.calendar import SHANGHAI
+
     meetings = (
         (date(2026, 1, 28), "FOMC 利率决议"),
         (date(2026, 3, 18), "FOMC 利率决议"),
@@ -242,40 +242,67 @@ def official_core_events(on: date, horizon_days: int = 7) -> list[MacroEvent]:
                 name=name,
                 region="美国",
                 importance=5,
-                scheduled_at=datetime(day.year, day.month, day.day, 14, 0, tzinfo=et),
-                notes=["公开日程补充（美联储例会）"],
+                scheduled_at=datetime.combine(day, time(9, 0), tzinfo=SHANGHAI),
+                notes=["公开日程补充（美联储例会，上海日历日）"],
             )
         )
     return out
 
 
+def _region_bucket(region: str, name: str) -> str:
+    text = f"{region} {name}"
+    if any(k in text for k in ("美国", "全美", "美联储", "FOMC", "USA")) or region in {"美国", "US"}:
+        return "US"
+    if any(k in text for k in ("中国", "内地")) or region in {"中国", "CN"}:
+        return "CN"
+    if any(k in text for k in ("欧元区", "欧央行", "欧洲央行")):
+        return "EU"
+    if any(k in text for k in ("日本", "日央行", "日银")):
+        return "JP"
+    if any(k in text for k in ("英国", "英央行", "英格兰银行")):
+        return "UK"
+    return "XX"
+
+
 def _infer_event_type(name: str, region: str) -> str:
     text = f"{region} {name}"
+    bucket = _region_bucket(region, name)
+    if "FOMC" in text or "联邦公开市场" in text or "美联储议息" in text or "美联储利率决议" in text:
+        return "FOMC"
+    if "欧央行" in text or "欧洲央行" in text:
+        return "ECB"
+    if "日央行" in text or "日银" in text or "日本央行" in text:
+        return "BOJ"
+    if "英央行" in text or "英格兰银行" in text:
+        return "BOE"
+    if "非农" in text:
+        return "US_NFP"
+    if "PCE" in text.upper():
+        return "US_PCE"
     if "核心CPI" in text or "核心消费" in text:
-        return "US_CORE_CPI" if ("美" in text or "美国" in text) else "CN_CPI"
-    rules = (
-        ("非农", "US_NFP"),
-        ("失业率", "US_UNEMP"),
-        ("PCE", "US_PCE"),
-        ("CPI", "US_CPI" if ("美" in text or "美国" in text) else "CN_CPI"),
-        ("PPI", "US_PPI" if ("美" in text or "美国" in text) else "CN_PPI"),
-        ("GDP", "US_GDP" if ("美" in text or "美国" in text) else "CN_GDP"),
-        ("零售", "US_RETAIL"),
-        ("FOMC", "FOMC"),
-        ("联储", "FOMC"),
-        ("利率决议", "FOMC" if ("美" in text or "联储" in text) else "ECB"),
-        ("LPR", "CN_LPR"),
-        ("社融", "CN_SF"),
-        ("M2", "CN_M2"),
-        ("PMI", "CN_PMI" if ("中" in text or "中国" in text) else "US_ISM_MFG"),
-        ("欧央行", "ECB"),
-        ("日央行", "BOJ"),
-        ("OPEC", "OPEC"),
-        ("EIA", "EIA"),
-    )
-    for needle, etype in rules:
-        if needle.lower() in text.lower() or needle in text:
-            return etype
+        return {"US": "US_CORE_CPI", "CN": "CN_CPI"}.get(bucket, "OTHER")
+    if "CPI" in text or "消费物价" in text:
+        return {"US": "US_CPI", "CN": "CN_CPI"}.get(bucket, "OTHER")
+    if "PPI" in text:
+        return {"US": "US_PPI", "CN": "CN_PPI"}.get(bucket, "OTHER")
+    if "GDP" in text:
+        return {"US": "US_GDP", "CN": "CN_GDP"}.get(bucket, "OTHER")
+    if "零售" in text:
+        return "US_RETAIL" if bucket == "US" else "OTHER"
+    if "LPR" in text:
+        return "CN_LPR"
+    if "社融" in text:
+        return "CN_SF"
+    if "M2" in text:
+        return "CN_M2"
+    if "PMI" in text or "ISM" in text:
+        return {"CN": "CN_PMI", "US": "US_ISM_MFG"}.get(bucket, "OTHER")
+    if "利率决议" in text or "议息" in text:
+        return {"US": "FOMC", "EU": "ECB", "JP": "BOJ", "UK": "BOE", "CN": "PBOC"}.get(bucket, "OTHER")
+    if "OPEC" in text:
+        return "OPEC"
+    if "EIA" in text:
+        return "EIA"
     return "OTHER"
 
 
@@ -354,12 +381,12 @@ def live_calendar(on: date, horizon_days: int = 7) -> tuple[list[MacroEvent], li
         if df is None or getattr(df, "empty", True):
             continue
         notes.append(f"{fn_name} 返回 {len(df)} 行（已解析华尔街见闻为主）")
-    have_fomc = {e.scheduled_at.date() for e in events if e.event_type == "FOMC" and e.scheduled_at}
+    have_official = {e.id for e in events}
     for ev in official_core_events(on, horizon_days):
-        meet_day = ev.scheduled_at.date() if ev.scheduled_at is not None else None
-        if meet_day is not None and meet_day in have_fomc:
+        if ev.id in have_official:
             continue
         events.append(ev)
+        meet_day = ev.scheduled_at.date() if ev.scheduled_at is not None else None
         notes.append(f"公开日程补充：{ev.name} {meet_day}")
     return events, notes
 

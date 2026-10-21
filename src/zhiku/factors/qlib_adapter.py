@@ -69,12 +69,29 @@ def prepare_from_csv(csv_dir: Path, qlib_dir: Path) -> str:
     return f"已将 {csv_dir} 的 CSV 写入 qlib 目录 {qlib_dir}（{n} 个标的）"
 
 
-def prepare_from_store(store: MarketStore, qlib_dir: Path, *, adjust: str = "qfq") -> str:
-    bars = store.bars(adjust=adjust)
+def prepare_from_store(
+    store: MarketStore,
+    qlib_dir: Path,
+    *,
+    adjust: str = "qfq",
+    symbols: list[str] | None = None,
+    min_bars: int = 80,
+) -> str:
+    bars = store.bars(symbols, adjust=adjust)
     if bars.empty:
         return "本地库无日线，请先 zk data sync"
+    if min_bars > 0 and "symbol" in bars.columns:
+        counts = bars.groupby("symbol").size()
+        keep = counts[counts >= min_bars].index
+        dropped = int((counts < min_bars).sum())
+        bars = bars[bars["symbol"].isin(keep)]
+    else:
+        dropped = 0
+    if bars.empty:
+        return "有效日线过短，无法导出 qlib"
     n = dump_qlib(bars, Path(qlib_dir))
-    return f"已从本地库导出 {n} 个标的到 {qlib_dir}"
+    extra = f"（跳过日线不足 {min_bars} 根的 {dropped} 只）" if dropped else ""
+    return f"已从本地库导出 {n} 个标的到 {qlib_dir}{extra}"
 
 
 def dump_qlib(bars: pd.DataFrame, qlib_dir: Path) -> int:
