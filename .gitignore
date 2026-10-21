@@ -12,6 +12,8 @@ examples/kb/data/
 examples/kb/models/
 qlib_data/
 .live-kb/
+mlruns/
+/workspace/
 
 # Python
 .venv/
