@@ -684,6 +684,90 @@ def macro_cmd(
         typer.echo(f"已写入 {path}", err=True)
 
 
+@app.command("export-review")
+def export_review_cmd(
+    ctx: typer.Context,
+    date_text: Optional[str] = typer.Option(None, "--date"),
+) -> None:
+    """导出外部研判任务包（候选、截面、新闻摘录、大师清单）。"""
+    from zhiku.ai.pack import build_review_pack, write_review_pack
+    from zhiku.pipeline.daily import run_daily
+    from zhiku.pipeline.settings import load_pipeline_settings
+
+    paths: Paths = ctx.obj["paths"]
+    paths.ensure_runtime_dirs()
+    on = _parse_date(date_text)
+    settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
+    daily = run_daily(paths, on, provider_kind=ctx.obj["provider_kind"])
+    from zhiku.pipeline.universe import load_pipeline_universe
+
+    rows, _, _ = load_pipeline_universe(paths, on, provider_kind=ctx.obj["provider_kind"], settings=settings)
+    pack = build_review_pack(
+        asof=on,
+        candidates=daily.candidates,
+        rows=rows,
+        masters=settings.ai.masters,
+        news=daily.news,
+        macro=daily.macro,
+        judge_n=settings.ai.judge_n,
+    )
+    dest = paths.reports / f"{on.isoformat()}-review-pack.json"
+    write_review_pack(dest, pack)
+    typer.echo(str(dest))
+
+
+@app.command("ingest-review")
+def ingest_review_cmd(
+    ctx: typer.Context,
+    path: Path = typer.Argument(..., exists=True, readable=True, help="zhiku.review_result.v1 JSON"),
+) -> None:
+    """把外部研判结果写入决策日志。"""
+    from zhiku.ai.journal import DecisionJournal
+    from zhiku.ai.pack import load_review_result
+
+    paths: Paths = ctx.obj["paths"]
+    paths.ensure_runtime_dirs()
+    result = load_review_result(path)
+    n = DecisionJournal(paths.journal / "ai_decisions.jsonl").append_result(
+        result, available={"source": str(path)}
+    )
+    typer.echo(f"写入 {n} 条决策日志（asof={result.asof} backend={result.backend}）")
+
+
+@app.command("review-scorecard")
+def review_scorecard_cmd(
+    ctx: typer.Context,
+    formula_top_n: int = typer.Option(10, "--formula-top"),
+) -> None:
+    """AI 研究跟进/回避 在 T+5、T+20 对同池等权的超额，对照公式排名。"""
+    from zhiku.ai.journal import DecisionJournal
+    from zhiku.ai.scorecard import build_scorecard
+    from zhiku.backtest.engine import load_price_panel, load_price_panel_from_store
+
+    paths: Paths = ctx.obj["paths"]
+    journal = DecisionJournal(paths.journal / "ai_decisions.jsonl")
+    prices = None
+    if ctx.obj["provider_kind"] == "live":
+        from zhiku.data.store import MarketStore
+
+        store = MarketStore(paths.data_dir)
+        prices = load_price_panel_from_store(store)
+    else:
+        csv = paths.fixtures / "monthly_prices.csv"
+        if csv.is_file():
+            prices = load_price_panel(csv)
+    if prices is None or prices.empty:
+        _die("缺价格面板，无法做 scorecard")
+    card = build_scorecard(journal, prices, formula_top_n=formula_top_n)
+    typer.echo(f"日志截止 {card.asof_max or '空'}")
+    for note in card.notes:
+        typer.echo(note, err=True)
+    for gname, hz in card.groups.items():
+        for h, stat in hz.items():
+            ex = "待定" if stat.excess is None else f"{stat.excess:.2%}"
+            typer.echo(f"{gname} T+{h} 超额={ex} n={stat.n} 待定={stat.pending}")
+
+
 @app.command("debate")
 def debate_cmd(symbol: str) -> None:
     """可选 TradingAgents 辩论。未安装时友好提示并以非零码退出。"""

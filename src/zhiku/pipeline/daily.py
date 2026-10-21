@@ -47,6 +47,8 @@ class DailyResult:
     missing_ratio: float | None = None
     pit_universe: dict = field(default_factory=dict)
     merge_weights: dict = field(default_factory=dict)
+    ai_layer: dict = field(default_factory=dict)
+    review_pack: str | None = None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False, indent=2)
@@ -337,6 +339,30 @@ def run_daily(
     result.news = json.loads(news.to_json())
     notes.extend(macro.notes)
     notes.extend(news.notes)
+    trailing: dict = {}
+    if prices is not None and not getattr(prices, "empty", True) and len(prices) >= 252:
+        try:
+            mom = prices.iloc[-22] / prices.iloc[-252] - 1.0
+            trailing["universe_12_1"] = float(mom.mean(skipna=True))
+        except Exception:  # noqa: BLE001
+            trailing = {}
+    from zhiku.ai.runner import run_ai_layer
+
+    ai_result, pack_path, ai_notes = run_ai_layer(
+        asof=on,
+        paths=paths,
+        settings=settings,
+        candidates=result.candidates,
+        rows=rows,
+        news=result.news,
+        macro=result.macro,
+        trailing=trailing or None,
+    )
+    notes.extend(ai_notes)
+    if pack_path is not None:
+        result.review_pack = str(pack_path)
+    if ai_result is not None:
+        result.ai_layer = ai_result.to_dict()
     result.notes = list(dict.fromkeys(notes))
     return result
 

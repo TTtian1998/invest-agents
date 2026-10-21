@@ -150,6 +150,9 @@ A 股全市场（`--universe all --resume`）仍在跑：约 10605/16642 次尝�
 | `zk review --week` | 触发线命中率 + 事件剧本兑现 + 信源跟踪 |
 | `zk ui` | 本地看板（需 `[ui]`），含「宏观与事件」 |
 | `zk debate 600519` | 可选 TradingAgents |
+| `zk export-review` | 导出外部研判任务包（候选、截面、新闻摘录、大师清单） |
+| `zk ingest-review path.json` | 把 `zhiku.review_result.v1` 写回决策日志 |
+| `zk review-scorecard` | AI「研究跟进 / 回避」T+5、T+20 对同池等权超额，对照公式排名 |
 | `zk data sync` | 全市场增量同步到 `ZHIKU_KB/data`（可断点、限速） |
 | `zk backtest <公式\|trigger>` | 月度等权或触发线回测；live 用本地库价格 |
 | `zk factor prepare\|train\|predict` | 本地库→qlib bin→Alpha158/LightGBM |
@@ -161,6 +164,8 @@ A 股全市场（`--universe all --resume`）仍在跑：约 10605/16642 次尝�
 每条**入选**新闻结构化输出：`so_what` / `priced_in` / `impact` / `counter_view` / `next_check` / `confidence`，并分别标注**事实 / 解读 / 推测**。低价值（纯情绪、旧闻翻炒）只计数，不展开。报告以分析为主体，原文链接放附录。
 
 分析层：有 `ZHIKU_LLM_KEY` 或 `OPENAI_API_KEY` 时走 LLM；没有 key 则规则模板，并标明「未做深度分析」。测试默认无 key。
+
+研判层（`docs/ai_layer.md`）：公式/量化初筛，AI 判断候选前 10。后端 `ZHIKU_LLM_BACKEND=auto|openai|mock|external`，兼容 DeepSeek/Qwen/本地（`ZHIKU_LLM_BASE_URL`）。无 key 时导出 `review-pack.json`，`zk ingest-review` 写回；`zk review-scorecard` 对账 T+5/T+20 超额。结论进 `journal/ai_decisions.jsonl`。
 
 ### 信源分级（YAML 可配）
 

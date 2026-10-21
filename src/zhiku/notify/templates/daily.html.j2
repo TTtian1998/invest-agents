@@ -72,6 +72,30 @@
     </tr>
     {% endfor %}
   </table>
+  <h2>AI 研判</h2>
+  {% set ai = daily.ai_layer if daily.ai_layer is defined and daily.ai_layer else {} %}
+  {% if daily.review_pack %}
+  <p class="note">任务包：{{ daily.review_pack }}</p>
+  {% endif %}
+  {% if ai.regime %}
+  <p>市场状态 {{ ai.regime.style }} / {{ ai.regime.value_or_growth }}；更值得观察 {{ (ai.regime.prefer_screens or []) | join("、") or "缺数据" }}（{{ ai.regime.reason }}；cite={{ ai.regime.cite }}）</p>
+  {% endif %}
+  {% if ai.judgments %}
+  <ul>
+    {% for j in ai.judgments %}
+    <li><strong>{{ j.symbol }}</strong> {{ j.name }} — {{ j.stance }} 置信度 {{ j.confidence }}；失效 {{ j.invalidation }}；时间止损 {{ j.time_stop_days }} 日
+      <ul>
+        {% for c in j.long_case %}<li>多：{{ c.claim }}（{{ c.cite }}）</li>{% endfor %}
+        {% for c in j.short_case %}<li>空：{{ c.claim }}（{{ c.cite }}）</li>{% endfor %}
+      </ul>
+    </li>
+    {% endfor %}
+  </ul>
+  {% elif daily.review_pack %}
+  <p class="note">待外部研判写回（zk ingest-review）。</p>
+  {% else %}
+  <p class="note">无研判。</p>
+  {% endif %}
   <h2>AI 审核</h2>
   {% for a in daily.audits %}
     <h3>{{ a.symbol }} {{ a.name }} — {{ a.conclusion }}</h3>

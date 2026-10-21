@@ -48,6 +48,23 @@ qlib 默认 {{ q.kind or "未训练" }} RankIC={{ q.rank_ic if q.rank_ic is not 
 {% endif %}
 {% endfor %}
 
+## AI 研判
+{% set ai = daily.ai_layer if daily.ai_layer is defined and daily.ai_layer else {} %}
+{% if daily.review_pack %}
+- 任务包：{{ daily.review_pack }}
+{% endif %}
+{% if ai.regime %}
+- 状态：{{ ai.regime.style }} / {{ ai.regime.value_or_growth }}；建议 {{ (ai.regime.prefer_screens or []) | join("、") or "缺数据" }}
+{% endif %}
+{% for j in (ai.judgments or [])[:10] %}
+- {{ j.symbol }} {{ j.stance }} {{ j.confidence }}；失效 {{ j.invalidation }}；止损 {{ j.time_stop_days }}日
+{% endfor %}
+{% if not ai.judgments and daily.review_pack %}
+- 待 zk ingest-review
+{% elif not ai.judgments and not daily.review_pack %}
+- 无
+{% endif %}
+
 ## 多空机会
 {% set nws = daily.news or {} %}
 {% for o in (nws.opportunities or [])[:10] %}

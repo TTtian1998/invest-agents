@@ -125,6 +125,30 @@
 无回测（缺价格面板）。
 {% endif %}
 
+## AI 研判
+{% set ai = daily.ai_layer if daily.ai_layer is defined and daily.ai_layer else {} %}
+{% if daily.review_pack %}
+- 任务包：{{ daily.review_pack }}
+{% endif %}
+{% if ai.regime %}
+- 市场状态：{{ ai.regime.style }} / {{ ai.regime.value_or_growth }}；更值得观察 {{ (ai.regime.prefer_screens or []) | join("、") or "缺数据" }}（{{ ai.regime.reason }}；cite={{ ai.regime.cite }}）
+{% endif %}
+{% if ai.judgments %}
+{% for j in ai.judgments %}
+- **{{ j.symbol }}** {{ j.name }} — {{ j.stance }} 置信度 {{ j.confidence }}；失效：{{ j.invalidation }}；时间止损 {{ j.time_stop_days }} 日
+{% for c in j.long_case %}
+  - 多：{{ c.claim }}（{{ c.cite }}）
+{% endfor %}
+{% for c in j.short_case %}
+  - 空：{{ c.claim }}（{{ c.cite }}）
+{% endfor %}
+{% endfor %}
+{% elif not daily.review_pack %}
+无研判。
+{% else %}
+待外部研判写回（zk ingest-review）。
+{% endif %}
+
 ## AI 审核
 {% for a in daily.audits %}
 ### {{ a.symbol }} {{ a.name }} — {{ a.conclusion }}

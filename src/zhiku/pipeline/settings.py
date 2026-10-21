@@ -110,6 +110,8 @@ class BacktestSettings(BaseModel):
 
 class AISettings(BaseModel):
     top_n: int = 15
+    judge_n: int = 10
+    backend: str = "auto"
     masters: list[str] = Field(
         default_factory=lambda: [
             "buffett",
