@@ -79,7 +79,7 @@ def ensure_index_member_history(
     notes: list[str] = []
     if fetcher is None or not dates:
         return 0, notes
-    missing = [d for d in dates if not store.index_symbols(index_code, d)]
+    missing = [d for d in dates if len(store.index_symbols(index_code, d)) < 50]
     if not missing:
         return 0, notes
     from zhiku.data.fetchers import baostock_index_members_hist

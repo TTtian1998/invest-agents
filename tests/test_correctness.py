@@ -148,6 +148,15 @@ def test_benchmark_sanity_gap(tmp_path) -> None:
     assert gap < 0.25
 
 
+def test_normalize_bs_reads_baostock_prefix() -> None:
+    from zhiku.data.codes import normalize_bs, normalize_cn
+
+    assert normalize_bs("sh.600000") == "600000"
+    assert normalize_bs("sz.000333") == "000333"
+    assert normalize_cn("sh.600000") == "SH"
+    assert normalize_bs("000333") == "000333"
+
+
 def test_pit_membership_drops_future_members() -> None:
     idx = pd.to_datetime(
         ["2024-01-31", "2024-02-29", "2024-03-31", "2024-04-30", "2024-05-31", "2024-06-30"]

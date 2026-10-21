@@ -25,6 +25,16 @@ def normalize_cn(symbol: str) -> str:
     return code
 
 
+def normalize_bs(symbol: str) -> str:
+    """baostock ``sh.600000`` / ``sz.000333`` → 六位代码。"""
+    text = str(symbol).strip()
+    if "." in text:
+        left, right = text.split(".", 1)
+        if left.lower() in {"sh", "sz", "bj"}:
+            return normalize_cn(right)
+    return normalize_cn(text)
+
+
 def sina_code(symbol: str) -> str:
     """新浪 / 腾讯日线前缀。"""
     code = normalize_cn(symbol)

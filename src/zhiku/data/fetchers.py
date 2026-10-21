@@ -16,6 +16,7 @@ from zhiku.data.codes import (
     infer_market,
     is_cn_etf,
     limit_threshold,
+    normalize_bs,
     normalize_cn,
     yfinance_cn,
 )
@@ -882,7 +883,8 @@ def baostock_index_members_hist(
         if not row:
             out[(code, on)] = MissingData(f"缺历史成分 {raw_code}@{on}")
             continue
-        codes = [normalize_cn(str(v)) for v in (row.get("codes") or []) if v]
+        codes = [normalize_bs(str(v)) for v in (row.get("codes") or []) if v]
+        codes = [c for c in codes if len(c) == 6 and c.isdigit()]
         if codes:
             out[(code, on)] = list(dict.fromkeys(codes))
         else:
