@@ -80,9 +80,13 @@ sizing:
   stop_pct: 0.08
 
 merge:
-  formula: 0.6
-  qlib: 0.4
-  icir_threshold: 0.20       # 样本外 RankICIR 低于该值则按比例降低量化权重
+  formula: 0.90
+  qlib: 0.10                 # 测试集 RankIC 为负：仅做过闸公式内排序辅助
+  qlib_floor: 0.10
+  qlib_cap: 0.40
+  rank_ic_threshold: 0.03    # 前瞻实盘 RankIC 达此值滚到上限
+  icir_threshold: 0.20
+  formula_first: true        # 候选前 10 只从过闸公式池取，量化分不单独进池
 
 backtest:
   rebalance: monthly

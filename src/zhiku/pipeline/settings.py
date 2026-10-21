@@ -84,9 +84,13 @@ class SizingSettings(BaseModel):
 
 
 class MergeSettings(BaseModel):
-    formula: float = 0.6
-    qlib: float = 0.4
+    formula: float = 0.90
+    qlib: float = 0.10
+    qlib_floor: float = 0.10
+    qlib_cap: float = 0.40
+    rank_ic_threshold: float = 0.03
     icir_threshold: float = 0.20
+    formula_first: bool = True
 
 
 class BacktestSettings(BaseModel):

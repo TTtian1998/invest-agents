@@ -83,7 +83,10 @@
 - 状态：{{ q.status or "未训练" }}
 - 训练日期：{{ q.trained_on or "未训练" }}
 - IC：{{ q.ic if q.ic is not none else "缺数据" }}；RankIC：{{ q.rank_ic if q.rank_ic is not none else "缺数据" }}；RankICIR：{{ q.rank_icir if q.rank_icir is not none else (q.icir if q.icir is not none else "缺数据") }}
-- 量化分权重按样本外 RankICIR 自动缩放：基准 {{ mw.qlib_weight_base if mw.qlib_weight_base is not none else 0.4 }} × {{ mw.qlib_weight_scale if mw.qlib_weight_scale is not none else "缺数据" }} = {{ mw.qlib_weight_effective if mw.qlib_weight_effective is not none else "缺数据" }}（阈值 {{ mw.icir_threshold if mw.icir_threshold is not none else 0.20 }}）
+- 量化分权重：{{ mw.qlib_weight_effective if mw.qlib_weight_effective is not none else 0.10 }}（公式 {{ mw.formula_weight if mw.formula_weight is not none else 0.90 }}；上限 {{ mw.qlib_weight_cap if mw.qlib_weight_cap is not none else 0.40 }}）
+{% if mw.oos_unverified %}
+- 量化样本外未验证
+{% endif %}
 {% if mw.note %}
 - {{ mw.note }}
 {% endif %}

@@ -22,7 +22,10 @@
 {% endfor %}
 
 ## 候选前 20
-股票池 {{ daily.universe_size }}；缺数据 {{ "%.1f"|format((daily.missing_ratio or 0)*100) }}%。未过闸公式分不计入总分。
+股票池 {{ daily.universe_size }}；缺数据 {{ "%.1f"|format((daily.missing_ratio or 0)*100) }}%。未过闸公式分不计入总分。候选前 10 以过闸公式为主。
+{% if (daily.merge_weights or {}).oos_unverified %}
+- 量化样本外未验证
+{% endif %}
 {% for c in (daily.candidates or [])[:20] %}
 - {{ c.symbol }} {{ c.name }} 总分 {{ "%.1f"|format(c.total or 0) }}（过闸公式 {{ "%.1f"|format(c.formula_score or 0) }} / 量化 {{ "%.1f"|format(c.qlib_score or 0) }}）{{ (c.screens or {})|join(",") }}
 {% endfor %}
@@ -40,7 +43,10 @@
 {% set q = daily.qlib or {} %}
 {% set mw = daily.merge_weights or {} %}
 qlib 默认 {{ q.kind or "未训练" }} RankIC={{ q.rank_ic if q.rank_ic is not none else "缺数据" }} RankICIR={{ q.rank_icir if q.rank_icir is not none else q.icir }}
-量化权重 {{ mw.qlib_weight_base }} × {{ mw.qlib_weight_scale }} = {{ mw.qlib_weight_effective }}（阈值 {{ mw.icir_threshold }}）
+量化权重 {{ mw.qlib_weight_effective }}（公式 {{ mw.formula_weight }}；量化仅排序辅助{% if mw.oos_unverified %}；量化样本外未验证{% endif %}）
+{% if mw.note %}
+- {{ mw.note }}
+{% endif %}
 {% set cmp = q.comparison or {} %}
 {% for mk, mm in cmp.items() %}
 {% if mk in ["lgb_lite", "qlib_alpha158"] and mm %}

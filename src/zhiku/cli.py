@@ -645,6 +645,52 @@ def factor_research_round2(
     )
 
 
+@factor_app.command("research-round3")
+def factor_research_round3(
+    ctx: typer.Context,
+    out_dir: Optional[Path] = typer.Option(None, "--out", help="实验日志目录，默认 artifacts/round3"),
+    asof_text: Optional[str] = typer.Option(None, "--asof"),
+) -> None:
+    """第三轮：T+20 行业中性超额 + walk-forward 多折。测试集只看一次。产出不进 git。"""
+    from zhiku.data.store import MarketStore
+    from zhiku.factors.experiment import run_round3
+
+    paths: Paths = ctx.obj["paths"]
+    store = MarketStore(paths.data_dir)
+    dest = out_dir or Path("/opt/cursor/artifacts/zhiku-quant-round3")
+    asof = _parse_date(asof_text)
+    payload = run_round3(store, asof=asof, out_dir=dest, models_dir=paths.models_dir)
+    kept = payload["payload"].get("kept") or []
+    typer.echo(
+        f"第三轮完成 {payload['payload'].get('n_experiments')} 个实验；"
+        f"测试集查看次数={payload['payload'].get('test_looks')}；"
+        f"保留={kept}；锁={payload['payload'].get('locked')}；日志={dest}"
+    )
+
+
+@factor_app.command("style-attrib")
+def factor_style_attrib(
+    ctx: typer.Context,
+    out_dir: Optional[Path] = typer.Option(None, "--out", help="归因目录，默认 artifacts/style-attrib"),
+    asof_text: Optional[str] = typer.Option(None, "--asof"),
+) -> None:
+    """dividend/graham 分年+行业超额，必要时试 EW 12-1 开关。测试集只看一次。"""
+    from zhiku.data.store import MarketStore
+    from zhiku.backtest.style_attrib import run_style_attribution
+    from zhiku.pipeline.settings import load_pipeline_settings
+
+    paths: Paths = ctx.obj["paths"]
+    store = MarketStore(paths.data_dir)
+    dest = out_dir or Path("/opt/cursor/artifacts/zhiku-style-attrib")
+    asof = _parse_date(asof_text)
+    settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
+    payload = run_style_attribution(store, settings, asof=asof, out_dir=dest)
+    typer.echo(
+        f"风格归因完成；轮动={payload.get('rotation')}；"
+        f"开关测试查看={(payload.get('regime') or {}).get('test_looks')}；日志={dest}"
+    )
+
+
 @factor_app.command("predict")
 def factor_predict(ctx: typer.Context) -> None:
     """输出 qlib 分数；未训练则空结果并提示。"""

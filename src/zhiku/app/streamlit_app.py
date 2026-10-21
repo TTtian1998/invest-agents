@@ -130,6 +130,11 @@ def main() -> None:
             st.info("还没有每日报告。请先运行 `zk --provider fixture daily --date 2026-10-20`。")
         else:
             st.write(f"截面日期：**{daily.get('asof')}**")
+            mw = daily.get("merge_weights") or {}
+            if mw.get("oos_unverified"):
+                st.warning("量化样本外未验证")
+            if mw.get("note"):
+                st.caption(str(mw["note"]))
             rows = daily.get("candidates") or []
             if rows:
                 df = pd.DataFrame(rows)

@@ -18,7 +18,7 @@ from zhiku.backtest.engine import (
 )
 from zhiku.config import Paths
 from zhiku.events.pit import drop_survivors, load_delist_map
-from zhiku.factors.merge import merge_scores, scale_merge_settings
+from zhiku.factors.merge import load_forward_rank_ic, merge_scores, scale_merge_settings
 from zhiku.factors.qlib_adapter import model_status, predict_scores, qlib_available
 from zhiku.notify.render import render, write_report
 from zhiku.pipeline.settings import load_pipeline_settings
@@ -292,16 +292,18 @@ def run_daily(
         notes.append("全部公式回测未过闸，总分仅用量化分。")
     elif not merge_formula and not qlib_scores:
         notes.append("全部公式回测未过闸且无量化分，候选为空。")
-    rank_icir = qlib_meta.get("rank_icir")
-    if rank_icir is None:
-        rank_icir = qlib_meta.get("icir")
-    try:
-        rank_icir_f = float(rank_icir) if rank_icir is not None else None
-    except (TypeError, ValueError):
-        rank_icir_f = None
-    merge_cfg, merge_info = scale_merge_settings(settings.merge, rank_icir_f)
+    rank_ic, rank_src = load_forward_rank_ic(paths.models_dir)
+    merge_cfg, merge_info = scale_merge_settings(settings.merge, rank_ic, source=rank_src)
     result.merge_weights = merge_info
     notes.append(merge_info["note"])
+    if merge_info.get("oos_unverified"):
+        notes.append("量化样本外未验证")
+    if merge_cfg.formula_first and merge_formula:
+        notes.append("候选前 10 以过闸公式为主（目前仅过闸公式进池），量化分仅做排序辅助。")
+        if qlib_scores:
+            dropped = set(qlib_scores) - set(merge_formula)
+            if dropped:
+                notes.append(f"过闸公式优先：{len(dropped)} 只仅有量化分的标的不进候选。")
     merged = merge_scores(names, merge_formula, qlib_scores, merge_cfg)
     result.screens = {
         name: [

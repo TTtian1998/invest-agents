@@ -101,6 +101,38 @@ def excess_vs_pool(label: pd.Series, membership: dict | None = None) -> pd.Serie
     return out
 
 
+def excess_vs_industry(
+    label: pd.Series,
+    industry: pd.Series | None,
+    membership: dict | None = None,
+) -> pd.Series:
+    """T+20 收益减当日同行等权，得到行业中性超额。缺行业归入「未知」。"""
+    if label.empty:
+        return label
+    frame = label.rename("label").reset_index()
+    if membership:
+        from zhiku.backtest.universe import members_on
+
+        keep = []
+        for dt, part in frame.groupby("date"):
+            allowed = members_on(membership, dt)
+            if allowed:
+                keep.append(part[part["symbol"].isin(allowed)])
+            else:
+                keep.append(part)
+        frame = pd.concat(keep, ignore_index=True) if keep else frame
+    if industry is None or industry.empty:
+        frame["industry"] = "未知"
+    else:
+        ind = industry.rename("industry").reset_index()
+        frame = frame.merge(ind, on=["date", "symbol"], how="left")
+        frame["industry"] = frame["industry"].fillna("未知")
+    frame["label"] = frame["label"] - frame.groupby(["date", "industry"])["label"].transform("mean")
+    out = frame.set_index(["date", "symbol"])["label"]
+    out.name = "label"
+    return out
+
+
 def neutralize(
     values: pd.Series,
     *,
@@ -140,6 +172,7 @@ def make_labels(
     *,
     kind: str,
     membership: dict | None = None,
+    industry: pd.Series | None = None,
 ) -> pd.Series:
     if kind == "t2_close":
         raw = label_t2_close(bars)
@@ -147,6 +180,8 @@ def make_labels(
         raw = label_open_horizon(bars, 20)
     elif kind == "t20_open_xs":
         raw = excess_vs_pool(label_open_horizon(bars, 20), membership)
+    elif kind == "t20_open_ind_xs":
+        raw = excess_vs_industry(label_open_horizon(bars, 20), industry, membership)
     elif kind == "t5_open":
         raw = label_open_horizon(bars, 5)
     else:
