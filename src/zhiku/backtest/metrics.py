@@ -134,12 +134,21 @@ def monthly_equal_weight(
     slippage_bps: float = 5.0,
     limit_up: pd.DataFrame | None = None,
     limit_down: pd.DataFrame | None = None,
+    membership: dict | None = None,
 ) -> tuple[pd.Series, float]:
-    """每月初等权再平衡 ``picks``。成本/滑点按换手从净值扣除。涨停不可买、跌停不可卖。"""
+    """每月初等权再平衡 ``picks``。成本/滑点按换手从净值扣除。涨停不可买、跌停不可卖。
+
+    ``membership`` 给出每个月末可投资样本；再平衡只在当时池内持仓，避免用今天的成分回填历史。
+    """
+    from zhiku.backtest.universe import members_on
+
     px = prices.copy()
     px.index = pd.to_datetime(px.index)
     px = px.sort_index()
     cols = [c for c in picks if c in px.columns]
+    if membership:
+        extra = [s for v in membership.values() for s in v if s in px.columns]
+        cols = list(dict.fromkeys(list(cols) + extra))
     if not cols:
         return pd.Series(dtype=float), 0.0
     month_ends = px.resample("ME").last().dropna(how="all")
@@ -153,7 +162,9 @@ def monthly_equal_weight(
     nav = 1.0
     cost = (cost_bps + slippage_bps) / 10000.0
     for i, (dt, row) in enumerate(month_ends.iterrows()):
-        avail = [c for c in cols if pd.notna(row.get(c))]
+        allowed = members_on(membership, dt) if membership is not None else None
+        pool = [c for c in cols if allowed is None or c in allowed]
+        avail = [c for c in pool if pd.notna(row.get(c))]
         # 跌停：无法卖出，保留上期权重
         stuck = []
         if dt in down.index:

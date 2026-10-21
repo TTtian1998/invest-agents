@@ -52,6 +52,7 @@ multifactor:
 merge:
   formula: 0.6
   qlib: 0.4
+  icir_threshold: 0.20       # 样本外 RankICIR 低于该值则按比例降低量化权重
 
 backtest:
   rebalance: monthly
@@ -59,11 +60,13 @@ backtest:
   cost_bps: 10
   slippage_bps: 5
   rf: 0.02
-  benchmark: "510300"
+  benchmark: "universe_ew"   # 超额对同池时点等权
   benchmark_symbols: ["510300", "000300", "000906"]
   sanity_max_ann_gap: 0.25
   min_sharpe: 0.0            # 示例数据较短，默认不因夏普挡掉公式
-  require_beat_benchmark: false
+  require_beat_benchmark: true
+  require_sharpe_ge_benchmark: true
+  pit_universe: auto
   top_n: 3
 
 ai:

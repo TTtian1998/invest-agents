@@ -85,6 +85,9 @@ class MarketFetcher:
     def index_members(self, index_code: str) -> list[str] | MissingData:
         raise NotImplementedError
 
+    def index_members_hist(self, index_code: str, on: date) -> list[str] | MissingData:
+        return MissingData(f"未实现历史成分 {index_code}@{on}")
+
     def cn_spot(self) -> list[dict] | MissingData:
         raise NotImplementedError
 
@@ -265,6 +268,10 @@ class AkshareFetcher(MarketFetcher):
         if code_col is None:
             return MissingData(f"指数 {code} 缺成分代码列")
         return [normalize_cn(str(v)) for v in df[code_col].tolist()]
+
+    def index_members_hist(self, index_code: str, on: date) -> list[str] | MissingData:
+        batch = baostock_index_members_hist([(index_code, on)])
+        return batch.get((index_code, on), MissingData(f"缺历史成分 {index_code}@{on}"))
 
     def cn_spot(self) -> list[dict] | MissingData:
         raw = self._ak(["stock_zh_a_spot_em", "stock_zh_a_spot"], field="spot")
@@ -819,6 +826,67 @@ def _yfinance_financials(symbol: str) -> dict[str, list[dict]] | MissingData:
         out[kind] = rows
     if not any_row:
         return MissingData("无财务", symbol=symbol)
+    return out
+
+
+def baostock_index_members_hist(
+    jobs: list[tuple[str, date]],
+    *,
+    timeout: int = 480,
+) -> dict[tuple[str, date], list[str] | MissingData]:
+    """子进程按日回查沪深300/中证500，并集即中证800。"""
+    import json
+    import subprocess
+    import sys
+
+    if not jobs:
+        return {}
+    worker = Path(__file__).resolve().with_name("_bs_index.py")
+    if not worker.is_file():
+        return {job: MissingData("缺少 baostock 成分 worker") for job in jobs}
+    payload = {
+        "jobs": [
+            {"index": INDEX_CSI.get(code, code), "date": on.isoformat()}
+            for code, on in jobs
+        ]
+    }
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(worker)],
+            input=json.dumps(payload, ensure_ascii=False),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {job: MissingData("baostock 历史成分超时") for job in jobs}
+    except Exception as exc:  # noqa: BLE001
+        return {job: MissingData(f"baostock 历史成分失败: {exc}") for job in jobs}
+    raw_text = (proc.stdout or "").strip()
+    brace = raw_text.find("{")
+    if brace < 0:
+        err = (proc.stderr or "").strip()[:200]
+        return {job: MissingData(f"baostock 历史成分无输出 {err}") for job in jobs}
+    try:
+        body = json.loads(raw_text[brace:])
+    except json.JSONDecodeError:
+        return {job: MissingData("baostock 历史成分无法解析") for job in jobs}
+    by_key: dict[tuple[str, str], dict] = {}
+    for row in body.get("results") or []:
+        by_key[(str(row.get("index") or ""), str(row.get("date") or "")[:10])] = row
+    out: dict[tuple[str, date], list[str] | MissingData] = {}
+    for code, on in jobs:
+        raw_code = INDEX_CSI.get(code, code)
+        row = by_key.get((raw_code, on.isoformat()))
+        if not row:
+            out[(code, on)] = MissingData(f"缺历史成分 {raw_code}@{on}")
+            continue
+        codes = [normalize_cn(str(v)) for v in (row.get("codes") or []) if v]
+        if codes:
+            out[(code, on)] = list(dict.fromkeys(codes))
+        else:
+            out[(code, on)] = MissingData(row.get("error") or f"空成分 {raw_code}@{on}")
     return out
 
 

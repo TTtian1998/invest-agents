@@ -31,11 +31,16 @@
 {% endif %}
 
 ## 公式回测闸门与基准
+{% set pit = daily.pit_universe or {} %}
+股票池：{{ pit.label or "未标时点池" }}（{{ pit.kind or "unknown" }}）
+闸门：对同池等权超额必须 > 0，且 Sharpe 不低于等权。
 {% for name, bt in (daily.backtests or {}).items() %}
-- {{ name }} 年化={{ bt.annualized }} 回撤={{ bt.max_drawdown }} Sharpe={{ bt.sharpe }} 超额={{ bt.excess_annualized }} {{ "过闸" if bt.passed_gate else "对照/未过闸" }}
+- {{ name }} 年化={{ bt.annualized }} 回撤={{ bt.max_drawdown }} Sharpe={{ bt.sharpe }} 对同池超额={{ bt.excess_annualized }} {{ "过闸" if bt.passed_gate else "对照/未过闸" }}
 {% endfor %}
 {% set q = daily.qlib or {} %}
+{% set mw = daily.merge_weights or {} %}
 qlib 默认 {{ q.kind or "未训练" }} RankIC={{ q.rank_ic if q.rank_ic is not none else "缺数据" }} RankICIR={{ q.rank_icir if q.rank_icir is not none else q.icir }}
+量化权重 {{ mw.qlib_weight_base }} × {{ mw.qlib_weight_scale }} = {{ mw.qlib_weight_effective }}（阈值 {{ mw.icir_threshold }}）
 {% set cmp = q.comparison or {} %}
 {% for mk, mm in cmp.items() %}
 {% if mk in ["lgb_lite", "qlib_alpha158"] and mm %}

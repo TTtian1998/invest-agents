@@ -397,6 +397,57 @@ class MarketStore:
             ).fetchall()
         return [r[0] for r in rows]
 
+    def index_asofs(self, index_code: str) -> list[date]:
+        with _connect(self.sqlite_path) as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT asof FROM index_members WHERE index_code=? ORDER BY asof",
+                (index_code,),
+            ).fetchall()
+        out: list[date] = []
+        for (raw,) in rows:
+            try:
+                out.append(date.fromisoformat(str(raw)[:10]))
+            except ValueError:
+                continue
+        return out
+
+    def index_symbols_asof(self, index_code: str, on: date) -> list[str]:
+        """最近一份 asof<=on 的成分；没有历史快照则空，避免用今天的名单回填过去。"""
+        with _connect(self.sqlite_path) as conn:
+            row = conn.execute(
+                "SELECT MAX(asof) FROM index_members WHERE index_code=? AND asof<=?",
+                (index_code, _iso(on)),
+            ).fetchone()
+            if not row or not row[0]:
+                return []
+            rows = conn.execute(
+                "SELECT symbol FROM index_members WHERE index_code=? AND asof=?",
+                (index_code, row[0]),
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def first_bar_dates(self, *, adjust: str = "qfq") -> dict[str, date]:
+        with _connect(self.sqlite_path) as conn:
+            rows = conn.execute(
+                "SELECT symbol, MIN(date) FROM bars WHERE adjust=? GROUP BY symbol",
+                (adjust,),
+            ).fetchall()
+        out: dict[str, date] = {}
+        for symbol, raw in rows:
+            try:
+                out[str(symbol)] = date.fromisoformat(str(raw)[:10])
+            except ValueError:
+                continue
+        return out
+
+    def symbols_with_bar_between(self, start: date, end: date, *, adjust: str = "qfq") -> set[str]:
+        with _connect(self.sqlite_path) as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT symbol FROM bars WHERE adjust=? AND date>=? AND date<=?",
+                (adjust, _iso(start), _iso(end)),
+            ).fetchall()
+        return {str(r[0]) for r in rows}
+
     def delist_map(self) -> dict[str, date]:
         with _connect(self.sqlite_path) as conn:
             rows = conn.execute(

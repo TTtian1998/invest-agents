@@ -12,12 +12,13 @@ from zhiku.backtest.engine import (
     backtest_screen,
     compute_benchmarks,
     crosscheck_public_index,
+    finalize_gate,
     load_price_panel,
     load_price_panel_from_store,
 )
 from zhiku.config import Paths
 from zhiku.events.pit import drop_survivors, load_delist_map
-from zhiku.factors.merge import merge_scores
+from zhiku.factors.merge import merge_scores, scale_merge_settings
 from zhiku.factors.qlib_adapter import model_status, predict_scores, qlib_available
 from zhiku.notify.render import render, write_report
 from zhiku.pipeline.settings import load_pipeline_settings
@@ -44,6 +45,8 @@ class DailyResult:
     fictional: bool = True
     universe_size: int = 0
     missing_ratio: float | None = None
+    pit_universe: dict = field(default_factory=dict)
+    merge_weights: dict = field(default_factory=dict)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False, indent=2)
@@ -114,11 +117,30 @@ def run_daily(
     prices = None
     limit_up = limit_down = None
     live_prices: dict[str, float] = {}
+    pit = None
     if provider_kind == "live" and store is not None and not store.is_empty():
-        bench_syms = list(dict.fromkeys(
-            [settings.backtest.benchmark, *list(settings.backtest.benchmark_symbols or [])]
-        ))
-        prices = load_price_panel_from_store(store, [r.symbol for r in rows] + bench_syms)
+        bench_syms = [
+            s
+            for s in dict.fromkeys(
+                [settings.backtest.benchmark, *list(settings.backtest.benchmark_symbols or [])]
+            )
+            if s and s not in {"universe_ew", "csi300", "csi800"}
+        ]
+        from zhiku.data.fetchers import AkshareFetcher
+        from zhiku.backtest.universe import build_pit_universe
+
+        pit = build_pit_universe(
+            store,
+            asof=on,
+            years=settings.data.years,
+            universe=settings.data.universe,
+            fetcher=AkshareFetcher(),
+            allow_fetch=True,
+        )
+        result.pit_universe = pit.to_dict()
+        notes.extend(pit.notes)
+        want = list(dict.fromkeys([r.symbol for r in rows] + pit.all_symbols + bench_syms))
+        prices = load_price_panel_from_store(store, want)
         limit_up, limit_down = store.limit_panels(list(prices.columns) if not prices.empty else [])
         if delist and prices is not None and not prices.empty:
             prices = drop_survivors(prices, delist, on)
@@ -145,8 +167,15 @@ def run_daily(
     gated: list[str] = []
     backtests: dict[str, dict] = {}
     benches: dict = {}
+    membership = pit.membership if pit is not None else None
+    universe_note = pit.label if pit is not None else None
     if prices is not None:
-        benches = compute_benchmarks(prices, settings.backtest)
+        benches = compute_benchmarks(
+            prices,
+            settings.backtest,
+            membership=membership,
+            universe_note=universe_note,
+        )
         for bname, bres in benches.items():
             backtests[bname] = bres.to_dict()
         if benches.get("universe_ew") and (benches.get("csi300") or benches.get("csi800")):
@@ -158,7 +187,7 @@ def run_daily(
             if probe.sanity_note:
                 notes.append(probe.sanity_note)
             if probe.sanity_ok is False:
-                notes.append("合理性断言失败：全池等权与指数年化差超过阈值，回测数字不可信。")
+                notes.append("同池等权与指数年化差超过阈值，请对照时点池口径，勿与静态今日成分混读。")
         for name, srows in bundle.screens.items():
             picks = [r.symbol for r in srows[: settings.backtest.top_n]]
             bt = backtest_screen(
@@ -170,12 +199,18 @@ def run_daily(
                 asof=on,
                 limit_up=limit_up,
                 limit_down=limit_down,
+                membership=membership,
+                universe_note=universe_note,
             )
             attach_benchmarks(bt, benches, sanity_max_ann_gap=settings.backtest.sanity_max_ann_gap)
+            finalize_gate(bt, settings.backtest)
             backtests[name] = bt.to_dict()
             if not bt.passed_gate:
                 gated.append(name)
-                notes.append(f"公式 {name} 回测未达标，公式分不计入总分，仅单票详情展示。")
+                notes.append(
+                    f"公式 {name} 回测未达标（对同池等权超额须>0 且 Sharpe 不低于等权），"
+                    "公式分不计入总分，仅单票详情展示。"
+                )
         for name in gated:
             active_screens.pop(name, None)
     else:
@@ -196,7 +231,17 @@ def run_daily(
         notes.append("全部公式回测未过闸，总分仅用量化分。")
     elif not merge_formula and not qlib_scores:
         notes.append("全部公式回测未过闸且无量化分，候选为空。")
-    merged = merge_scores(names, merge_formula, qlib_scores, settings.merge)
+    rank_icir = qlib_meta.get("rank_icir")
+    if rank_icir is None:
+        rank_icir = qlib_meta.get("icir")
+    try:
+        rank_icir_f = float(rank_icir) if rank_icir is not None else None
+    except (TypeError, ValueError):
+        rank_icir_f = None
+    merge_cfg, merge_info = scale_merge_settings(settings.merge, rank_icir_f)
+    result.merge_weights = merge_info
+    notes.append(merge_info["note"])
+    merged = merge_scores(names, merge_formula, qlib_scores, merge_cfg)
     result.screens = {
         name: [
             {"symbol": r.symbol, "name": r.name, "score": r.score, "breakdown": r.breakdown}

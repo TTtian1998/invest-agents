@@ -210,6 +210,17 @@ def _sync_cn_meta(
             [{"symbol": s, "market": "CN", "instrument": "etf" if is_cn_etf(s) else "stock"} for s in members]
         )
 
+    if type(fetcher).index_members_hist is not MarketFetcher.index_members_hist:
+        from zhiku.backtest.universe import ensure_index_member_history, month_end_dates
+
+        hist_dates = month_end_dates(end, 3)
+        n_hist, hist_notes = ensure_index_member_history(
+            store, hist_dates, index_code="000906", fetcher=fetcher
+        )
+        report.notes.extend(hist_notes)
+        if n_hist:
+            _log(progress, f"历史中证800成分 {n_hist} 个时点")
+
     spot = timed_call(fetcher.cn_spot, 45, field="spot")
     if isinstance(spot, MissingData):
         store.log_missing(None, "spot", end, spot.reason)

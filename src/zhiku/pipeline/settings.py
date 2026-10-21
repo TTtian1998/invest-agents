@@ -74,6 +74,7 @@ class MultifactorSettings(BaseModel):
 class MergeSettings(BaseModel):
     formula: float = 0.6
     qlib: float = 0.4
+    icir_threshold: float = 0.20
 
 
 class BacktestSettings(BaseModel):
@@ -82,12 +83,14 @@ class BacktestSettings(BaseModel):
     cost_bps: float = 10.0
     slippage_bps: float = 5.0
     rf: float = 0.02
-    benchmark: str = "510300"
+    benchmark: str = "universe_ew"
     min_sharpe: float = 0.0
-    require_beat_benchmark: bool = False
+    require_beat_benchmark: bool = True
+    require_sharpe_ge_benchmark: bool = True
     top_n: int = 3
     benchmark_symbols: list[str] = Field(default_factory=lambda: ["510300", "000300", "000906"])
     sanity_max_ann_gap: float = 0.25
+    pit_universe: str = "auto"
 
 
 class AISettings(BaseModel):

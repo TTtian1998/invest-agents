@@ -6,7 +6,15 @@ from datetime import date
 
 import pandas as pd
 
-from zhiku.backtest.engine import compute_benchmarks, sanitize_mixed_adjust
+from zhiku.backtest.engine import (
+    attach_benchmarks,
+    backtest_screen,
+    compute_benchmarks,
+    finalize_gate,
+    sanitize_mixed_adjust,
+)
+from zhiku.backtest.metrics import monthly_equal_weight
+from zhiku.backtest.universe import build_pit_universe
 from zhiku.data.store import MarketStore
 from zhiku.data.sync import _upsert_spot_as_bars, repair_mixed_qfq
 from zhiku.events.blackswan import detect_emergency
@@ -138,6 +146,121 @@ def test_benchmark_sanity_gap(tmp_path) -> None:
     assert benches["csi300"].annualized is not None
     gap = abs(benches["universe_ew"].annualized - benches["csi300"].annualized)
     assert gap < 0.25
+
+
+def test_pit_membership_drops_future_members() -> None:
+    idx = pd.to_datetime(
+        ["2024-01-31", "2024-02-29", "2024-03-31", "2024-04-30", "2024-05-31", "2024-06-30"]
+    )
+    prices = pd.DataFrame(
+        {
+            "AAA": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            "BBB": [1.0, 1.2, 1.4, 1.6, 1.8, 2.0],
+        },
+        index=idx,
+    )
+    membership = {
+        idx[0]: ["AAA"],
+        idx[1]: ["AAA"],
+        idx[2]: ["AAA"],
+        idx[3]: ["AAA"],
+        idx[4]: ["AAA"],
+        idx[5]: ["AAA", "BBB"],
+    }
+    nav_static, _ = monthly_equal_weight(prices, ["AAA", "BBB"], cost_bps=0, slippage_bps=0)
+    nav_pit, _ = monthly_equal_weight(
+        prices, ["AAA", "BBB"], cost_bps=0, slippage_bps=0, membership=membership
+    )
+    assert float(nav_pit.iloc[-1]) < float(nav_static.iloc[-1])
+    assert float(nav_pit.iloc[-1]) < 1.15
+
+
+def test_pit_universe_does_not_backfill_today_members(tmp_path) -> None:
+    store = MarketStore(tmp_path / "data")
+    store.upsert_listings(
+        [
+            {"symbol": "AAA", "market": "CN", "list_date": "2020-01-01", "instrument": "stock"},
+            {"symbol": "BBB", "market": "CN", "list_date": "2020-01-01", "instrument": "stock"},
+        ]
+    )
+    store.upsert_index_members("000906", date(2026, 10, 21), ["AAA", "BBB"])
+    rows = []
+    for i, d in enumerate(pd.date_range("2023-10-31", "2026-10-21", freq="ME")):
+        for sym, base in (("AAA", 1.0), ("BBB", 1.0)):
+            close = base + i * 0.01
+            rows.append(
+                {
+                    "symbol": sym,
+                    "market": "CN",
+                    "date": d.date(),
+                    "adjust": "qfq",
+                    "close": close,
+                    "open": close,
+                    "high": close,
+                    "low": close,
+                }
+            )
+    store.upsert_bars(pd.DataFrame(rows))
+    pit = build_pit_universe(
+        store, asof=date(2026, 10, 21), years=3, universe="csi800", allow_fetch=False
+    )
+    assert pit.kind == "alla_listed"
+    assert "替代池" in pit.label
+    assert store.index_symbols_asof("000906", date(2023, 10, 31)) == []
+
+
+def test_gate_requires_excess_and_sharpe_vs_universe_ew() -> None:
+    idx = pd.to_datetime(
+        ["2024-01-31", "2024-02-29", "2024-03-31", "2024-04-30", "2024-05-31", "2024-06-30"]
+    )
+    prices = pd.DataFrame(
+        {
+            "WIN": [1.0, 1.10, 1.20, 1.30, 1.40, 1.50],
+            "LAG": [1.0, 0.99, 0.98, 0.97, 0.96, 0.95],
+            "510300": [1.0, 1.01, 1.02, 1.03, 1.04, 1.045],
+        },
+        index=idx,
+    )
+    settings = BacktestSettings(
+        min_sharpe=-99,
+        require_beat_benchmark=True,
+        require_sharpe_ge_benchmark=True,
+        cost_bps=0,
+        slippage_bps=0,
+        benchmark="universe_ew",
+    )
+    benches = compute_benchmarks(prices, settings)
+    lag = backtest_screen(prices, ["LAG"], settings, screen="greenblatt")
+    attach_benchmarks(lag, benches)
+    finalize_gate(lag, settings)
+    assert lag.excess_annualized is not None and lag.excess_annualized <= 0
+    assert lag.passed_gate is False
+    win = backtest_screen(prices, ["WIN"], settings, screen="multifactor")
+    attach_benchmarks(win, benches)
+    finalize_gate(win, settings)
+    assert win.excess_annualized is not None and win.excess_annualized > 0
+    assert win.sharpe is not None
+    assert benches["universe_ew"].sharpe is not None
+    assert win.sharpe >= benches["universe_ew"].sharpe
+    assert win.passed_gate is True
+
+    noisy = pd.DataFrame(
+        {
+            "NOISY": [1.0, 1.35, 0.90, 1.40, 0.85, 1.50],
+            "STEADY": [1.0, 1.04, 1.08, 1.12, 1.16, 1.20],
+            "510300": [1.0, 1.01, 1.02, 1.03, 1.04, 1.05],
+        },
+        index=idx,
+    )
+    benches2 = compute_benchmarks(noisy, settings)
+    hi = backtest_screen(noisy, ["NOISY"], settings, screen="dividend")
+    attach_benchmarks(hi, benches2)
+    finalize_gate(hi, settings)
+    assert hi.annualized is not None and benches2["universe_ew"].annualized is not None
+    if hi.annualized > benches2["universe_ew"].annualized:
+        assert hi.sharpe is not None and benches2["universe_ew"].sharpe is not None
+        if hi.sharpe < benches2["universe_ew"].sharpe:
+            assert hi.passed_gate is False
 
 
 def test_gated_formula_excluded_from_total() -> None:

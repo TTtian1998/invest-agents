@@ -96,20 +96,46 @@ def _nav_metrics(nav: pd.Series, *, screen: str, settings: BacktestSettings) -> 
     return summarize_nav(use, rf=settings.rf, periods_per_year=periods, screen=screen)
 
 
-def compute_benchmarks(prices: pd.DataFrame, settings: BacktestSettings) -> dict[str, BacktestResult]:
-    """全池等权 + 沪深300/中证800（ETF 或指数代码）。成本为 0，作对照不做交易。"""
+def compute_benchmarks(
+    prices: pd.DataFrame,
+    settings: BacktestSettings,
+    *,
+    membership: dict | None = None,
+    universe_note: str | None = None,
+) -> dict[str, BacktestResult]:
+    """同池时点等权 + 沪深300/中证800（ETF 或指数代码）。成本为 0，作对照不做交易。"""
     out: dict[str, BacktestResult] = {}
     if prices is None or prices.empty:
         return out
     extras = set(settings.benchmark_symbols or [])
-    extras.add(settings.benchmark)
-    members = [c for c in prices.columns if c not in extras]
-    if len(members) >= 2:
-        nav, _ = monthly_equal_weight(prices, members, cost_bps=0, slippage_bps=0)
+    if settings.benchmark and settings.benchmark not in {"universe_ew", "csi300", "csi800"}:
+        extras.add(settings.benchmark)
+    extras.update({"universe_ew", "csi300", "csi800"})
+    if membership:
+        members: list[str] = []
+        seen: set[str] = set()
+        for names in membership.values():
+            for symbol in names:
+                if symbol in prices.columns and symbol not in extras and symbol not in seen:
+                    seen.add(symbol)
+                    members.append(symbol)
+        nav, _ = monthly_equal_weight(
+            prices, members, cost_bps=0, slippage_bps=0, membership=membership
+        )
         if not nav.empty:
             out["universe_ew"] = summarize_nav(
                 nav, rf=settings.rf, periods_per_year=12.0, screen="universe_ew"
             )
+            out["universe_ew"].notes = [universe_note or "时点股票池等权"]
+    else:
+        members = [c for c in prices.columns if c not in extras]
+        if len(members) >= 2:
+            nav, _ = monthly_equal_weight(prices, members, cost_bps=0, slippage_bps=0)
+            if not nav.empty:
+                out["universe_ew"] = summarize_nav(
+                    nav, rf=settings.rf, periods_per_year=12.0, screen="universe_ew"
+                )
+                out["universe_ew"].notes = ["截面股票池等权（无历史时点名单）"]
     aliases = {
         "csi300": ("510300", "000300"),
         "csi800": ("000906",),
@@ -137,6 +163,7 @@ def attach_benchmarks(
     benches: dict[str, BacktestResult],
     *,
     sanity_max_ann_gap: float = 0.25,
+    primary_key: str | None = "universe_ew",
 ) -> BacktestResult:
     payload = {k: v.to_dict() for k, v in benches.items()}
     result.benchmarks = {
@@ -148,19 +175,21 @@ def attach_benchmarks(
         }
         for k, v in payload.items()
     }
-    primary = benches.get("csi300") or benches.get("csi800") or benches.get("universe_ew")
+    primary = (
+        benches.get(primary_key) if primary_key else None
+    ) or benches.get("universe_ew") or benches.get("csi300") or benches.get("csi800")
     if primary is not None and result.annualized is not None and primary.annualized is not None:
         result.benchmark_annualized = primary.annualized
         result.excess_annualized = result.annualized - primary.annualized
-        result.beat_benchmark = result.annualized >= primary.annualized
+        result.beat_benchmark = result.excess_annualized > 0
     ew = benches.get("universe_ew")
     idx = benches.get("csi300") or benches.get("csi800")
     if ew is not None and idx is not None and ew.annualized is not None and idx.annualized is not None:
         gap = abs(ew.annualized - idx.annualized)
         result.sanity_ok = gap <= sanity_max_ann_gap
         result.sanity_note = (
-            f"全池等权年化 {ew.annualized:.2%} vs 指数 {idx.annualized:.2%}，差 {gap:.2%}"
-            + ("，超过阈值，回测数字不可信" if not result.sanity_ok else "")
+            f"同池等权年化 {ew.annualized:.2%} vs 指数 {idx.annualized:.2%}，差 {gap:.2%}"
+            + ("，超过阈值，回测数字仍需对照时点池口径" if not result.sanity_ok else "")
         )
     return result
 
@@ -220,6 +249,8 @@ def backtest_screen(
     asof: date | None = None,
     limit_up: pd.DataFrame | None = None,
     limit_down: pd.DataFrame | None = None,
+    membership: dict | None = None,
+    universe_note: str | None = None,
 ) -> BacktestResult:
     if not picks:
         return BacktestResult(
@@ -246,6 +277,7 @@ def backtest_screen(
         slippage_bps=settings.slippage_bps,
         limit_up=limit_up,
         limit_down=limit_down,
+        membership=membership,
     )
     bench_nav = None
     if bench_col in panel.columns:
@@ -262,6 +294,8 @@ def backtest_screen(
     gate_notes.append(
         "财务截面须按公告日对齐（zhiku.events.pit.load_asof_universe）；价格面板按退市日截断，避免幸存者偏差。"
     )
+    if membership is not None:
+        gate_notes.append(universe_note or "再平衡只持有当时股票池内且有日线的样本，不用今天的成分回填历史。")
     if limit_up is not None or limit_down is not None:
         gate_notes.append("涨停不可买入、跌停不可卖出；成本与滑点按换手从净值扣除。")
     result = summarize_nav(
@@ -283,9 +317,22 @@ def backtest_screen(
 def _gate(result: BacktestResult, settings: BacktestSettings) -> bool:
     if result.sharpe is not None and result.sharpe < settings.min_sharpe:
         return False
-    if settings.require_beat_benchmark and result.beat_benchmark is False:
-        return False
+    if settings.require_beat_benchmark:
+        if result.excess_annualized is not None and result.excess_annualized <= 0:
+            return False
+        if result.beat_benchmark is False:
+            return False
+        if settings.require_sharpe_ge_benchmark:
+            ew = (result.benchmarks or {}).get("universe_ew") or {}
+            ew_sharpe = ew.get("sharpe")
+            if ew_sharpe is not None and (result.sharpe is None or result.sharpe < float(ew_sharpe)):
+                return False
     return True
+
+
+def finalize_gate(result: BacktestResult, settings: BacktestSettings) -> BacktestResult:
+    result.passed_gate = _gate(result, settings)
+    return result
 
 
 def backtest_trigger_line(

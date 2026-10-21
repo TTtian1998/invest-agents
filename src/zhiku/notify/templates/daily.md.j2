@@ -79,11 +79,20 @@
 
 ## qlib 因子
 {% set q = daily.qlib if daily.qlib is defined and daily.qlib else {} %}
+{% set mw = daily.merge_weights if daily.merge_weights is defined and daily.merge_weights else {} %}
 - 状态：{{ q.status or "未训练" }}
 - 训练日期：{{ q.trained_on or "未训练" }}
-- IC：{{ q.ic if q.ic is not none else "缺数据" }}；RankIC：{{ q.rank_ic if q.rank_ic is not none else "缺数据" }}
+- IC：{{ q.ic if q.ic is not none else "缺数据" }}；RankIC：{{ q.rank_ic if q.rank_ic is not none else "缺数据" }}；RankICIR：{{ q.rank_icir if q.rank_icir is not none else (q.icir if q.icir is not none else "缺数据") }}
+- 量化分权重按样本外 RankICIR 自动缩放：基准 {{ mw.qlib_weight_base if mw.qlib_weight_base is not none else 0.4 }} × {{ mw.qlib_weight_scale if mw.qlib_weight_scale is not none else "缺数据" }} = {{ mw.qlib_weight_effective if mw.qlib_weight_effective is not none else "缺数据" }}（阈值 {{ mw.icir_threshold if mw.icir_threshold is not none else 0.20 }}）
+{% if mw.note %}
+- {{ mw.note }}
+{% endif %}
 {% if daily.universe_size %}
-- 股票池：{{ daily.universe_size }}；缺数据比例：{{ "%.1f"|format((daily.missing_ratio or 0) * 100) }}%
+- 当日选股池：{{ daily.universe_size }}；缺数据比例：{{ "%.1f"|format((daily.missing_ratio or 0) * 100) }}%
+{% endif %}
+{% set pit = daily.pit_universe if daily.pit_universe is defined and daily.pit_universe else {} %}
+{% if pit %}
+- 回测股票池：{{ pit.label or "未标时点池" }}
 {% endif %}
 
 ## 今日候选（公式分{% if daily.candidates and daily.candidates[0].qlib_score is not none %} + qlib{% endif %}）
@@ -108,8 +117,9 @@
 {% endfor %}
 
 ## 回测摘要
+超额对「同池时点等权」；过闸须超额 > 0 且 Sharpe ≥ 同池等权。
 {% for name, bt in daily.backtests.items() %}
-- **{{ name }}**：年化 {{ bt.annualized }}；最大回撤 {{ bt.max_drawdown }}；夏普 {{ bt.sharpe }}；胜率 {{ bt.win_rate }}；换手 {{ bt.turnover }}；是否跑赢基准 {{ bt.beat_benchmark }}；闸门 {{ "通过" if bt.passed_gate else "未通过" }}
+- **{{ name }}**：年化 {{ bt.annualized }}；最大回撤 {{ bt.max_drawdown }}；夏普 {{ bt.sharpe }}；胜率 {{ bt.win_rate }}；换手 {{ bt.turnover }}；对同池超额 {{ bt.excess_annualized }}；是否跑赢同池 {{ bt.beat_benchmark }}；闸门 {{ "通过" if bt.passed_gate else "未通过" }}
 {% endfor %}
 {% if not daily.backtests %}
 无回测（缺价格面板）。
