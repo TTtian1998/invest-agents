@@ -54,6 +54,11 @@ def test_apply_switch_empties_basket_when_momentum_high() -> None:
         assert gated[pd.Timestamp(dt)] == []
     else:
         assert gated[pd.Timestamp(dt)] == ["V1", "V2"]
+    early = close.index[10]
+    early_picks = {pd.Timestamp(early): ["V1"]}
+    early_gated = apply_ew_12_1_switch(early_picks, close, membership, enable_le=0.0)
+    assert ew_index_12_1(close, membership, early) is None
+    assert early_gated[pd.Timestamp(early)] == ["V1"]
 
 
 def test_style_rotation_flags_growth_second_half() -> None:

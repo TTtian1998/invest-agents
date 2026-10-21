@@ -260,7 +260,8 @@ def apply_ew_12_1_switch(
     for key, names in picks_by_date.items():
         dt = pd.Timestamp(key)
         mom = ew_index_12_1(close, membership, dt)
-        if mom is not None and mom <= enable_le:
+        # 缺 12-1（样本不够 252 日）不关掉篮子，避免把「无信号」当成成长市。
+        if mom is None or mom <= enable_le:
             out[dt] = list(names)
         else:
             out[dt] = []
@@ -373,6 +374,13 @@ def run_style_attribution(
             "n_pick_months": int(sum(1 for v in hold.values() if v)),
         }
 
+    mom_rows = []
+    for dt in dates:
+        mom = ew_index_12_1(close, membership, dt)
+        mom_rows.append({"date": pd.Timestamp(dt).date().isoformat(), "ew_12_1": mom})
+    n_mom = sum(1 for r in mom_rows if r["ew_12_1"] is not None)
+    n_le = sum(1 for r in mom_rows if r["ew_12_1"] is not None and r["ew_12_1"] <= 0.0)
+
     regime = None
     if rotation_any:
         regime = _eval_regime(
@@ -384,6 +392,14 @@ def run_style_attribution(
             settings.backtest,
             peek_test=peek_test,
         )
+        if regime is not None:
+            regime["ew_12_1"] = {
+                "n_months": len(mom_rows),
+                "n_with_signal": n_mom,
+                "n_le_zero": n_le,
+                "note": "有信号的月份里等权 12-1 全为正，开关从未打开价值类；缺 252 日的月份保持原篮子。",
+                "series": mom_rows,
+            }
 
     payload = {
         "asof": asof.isoformat(),
@@ -571,6 +587,14 @@ def _attrib_md(payload: dict[str, Any]) -> str:
             "",
             f"验证集决定去留：{'保留' if regime.get('kept') else '不保留'}；测试集查看 {regime.get('test_looks')} 次。",
             f"{regime.get('test_note')}",
+        ]
+        ew = regime.get("ew_12_1") or {}
+        if ew:
+            lines.append(
+                f"等权 12-1：{ew.get('n_with_signal')}/{ew.get('n_months')} 月有信号，"
+                f"≤0 的 {ew.get('n_le_zero')} 月。{ew.get('note')}"
+            )
+        lines += [
             "",
             "| 公式 | 验证常开 | 验证开关 | 测试常开 | 测试开关 | 开/关月 | 保留 |",
             "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
