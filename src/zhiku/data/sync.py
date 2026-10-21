@@ -34,6 +34,7 @@ class SyncReport:
     notes: list[str] = field(default_factory=list)
     elapsed_s: float = 0.0
     used_fallback: str | None = None
+    spot_rows: list = field(default_factory=list)
 
     def summary(self) -> str:
         lines = [
@@ -108,6 +109,10 @@ def sync_market(
         symbols = symbols[: max(0, max_symbols)]
         report.notes.append(f"max_symbols={max_symbols}，实际 CN {len(symbols)} 只")
     _log(progress, f"CN 同步标的 {len(symbols)} 只，workers={workers}")
+    if incremental and report.spot_rows:
+        n_spot = _upsert_spot_as_bars(store, report.spot_rows, end, symbols=symbols, only_existing=True)
+        if n_spot:
+            report.notes.append(f"截面写入当日日线 {n_spot} 只（增量不必逐只 hist）")
 
     # 先前复权（回测/qlib），再财报（选股 PIT），最后不复权
     _sync_cn_bars(store, fetcher, symbols, start, end, resume, report, "qfq", workers, progress)
@@ -221,6 +226,60 @@ def _sync_cn_meta(
                 for r in spot
             ]
         )
+        report.spot_rows = spot
+
+
+def _upsert_spot_as_bars(
+    store: MarketStore,
+    spot: list[dict],
+    on: date,
+    *,
+    symbols: list[str] | None = None,
+    only_existing: bool = True,
+) -> int:
+    """把当日东财截面写成一根日线。只更新已有历史的标的，避免把未拉满的新票标成完成。"""
+    wanted = set(symbols) if symbols else None
+    rows = []
+    seen: list[str] = []
+    for r in spot:
+        symbol = r["symbol"]
+        if wanted is not None and symbol not in wanted:
+            continue
+        close = r.get("close")
+        if close is None:
+            continue
+        if only_existing:
+            if store.last_ok("bars:qfq", symbol) is None and store.last_ok("bars:none", symbol) is None:
+                continue
+        for adjust in ("qfq", "none"):
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "market": "CN",
+                    "date": on,
+                    "adjust": adjust,
+                    "open": r.get("open") or close,
+                    "high": r.get("high") or close,
+                    "low": r.get("low") or close,
+                    "close": close,
+                    "volume": r.get("volume"),
+                    "amount": r.get("amount"),
+                    "turnover": None,
+                    "pct_chg": r.get("pct_chg"),
+                    "limit_up": None,
+                    "limit_down": None,
+                }
+            )
+        seen.append(symbol)
+    if not rows:
+        return 0
+    import pandas as pd
+
+    store.upsert_bars(pd.DataFrame(rows))
+    for symbol in seen:
+        store.set_state("bars:qfq", symbol, last_ok=on, status="ok")
+        store.set_state("bars:none", symbol, last_ok=on, status="ok")
+    return len(seen)
 
 
 def _resolve_cn_symbols(store: MarketStore, universe: str, extra: list[str] | None) -> list[str]:

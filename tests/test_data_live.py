@@ -191,6 +191,26 @@ def test_store_roundtrip_and_pit(tmp_path: Path) -> None:
     assert "缺数据" in "".join(notes) or "截面" in "".join(notes)
 
 
+def test_spot_bars_only_update_existing(tmp_path: Path) -> None:
+    from zhiku.data.sync import _upsert_spot_as_bars
+
+    store = MarketStore(tmp_path / "data")
+    store.set_state("bars:qfq", "600519", last_ok=date(2026, 10, 20), status="ok")
+    n = _upsert_spot_as_bars(
+        store,
+        [
+            {"symbol": "600519", "close": 1700.0, "open": 1690.0, "high": 1710.0, "low": 1680.0, "volume": 1e6, "amount": 1e9},
+            {"symbol": "000001", "close": 10.0, "open": 10.0, "high": 10.1, "low": 9.9},
+        ],
+        date(2026, 10, 21),
+        symbols=["600519", "000001"],
+        only_existing=True,
+    )
+    assert n == 1
+    assert store.last_ok("bars:qfq", "600519") == date(2026, 10, 21)
+    assert store.last_ok("bars:qfq", "000001") is None
+
+
 def test_resume_skips_completed(tmp_path: Path) -> None:
     store = MarketStore(tmp_path / "data")
     fetcher = FakeFetcher()

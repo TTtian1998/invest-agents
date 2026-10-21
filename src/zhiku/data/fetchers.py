@@ -279,6 +279,12 @@ class AkshareFetcher(MarketFetcher):
         pb_col = _col(df, "市净率", "pb")
         cap_col = _col(df, "总市值", "mktcap")
         amt_col = _col(df, "成交额", "amount")
+        open_col = _col(df, "今开", "开盘", "open")
+        high_col = _col(df, "最高", "high")
+        low_col = _col(df, "最低", "low")
+        close_col = _col(df, "最新价", "收盘", "close")
+        vol_col = _col(df, "成交量", "volume")
+        pct_col = _col(df, "涨跌幅", "pct_chg")
         out = []
         for _, row in df.iterrows():
             code = normalize_cn(str(row[code_col]))
@@ -291,6 +297,12 @@ class AkshareFetcher(MarketFetcher):
                     "pb": _num(row[pb_col]) if pb_col else None,
                     "mktcap": _num(row[cap_col]) if cap_col else None,
                     "amount": _num(row[amt_col]) if amt_col else None,
+                    "open": _num(row[open_col]) if open_col else None,
+                    "high": _num(row[high_col]) if high_col else None,
+                    "low": _num(row[low_col]) if low_col else None,
+                    "close": _num(row[close_col]) if close_col else None,
+                    "volume": _num(row[vol_col]) if vol_col else None,
+                    "pct_chg": _num(row[pct_col]) if pct_col else None,
                     "st": "ST" in name.upper(),
                 }
             )
