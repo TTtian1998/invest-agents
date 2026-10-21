@@ -144,11 +144,14 @@ def sync_market(
                 _log(progress, f"港美 {i}/{len(g_syms)} {symbol}")
             _sync_global_symbol(store, fetcher, symbol, start, end, resume, report)
 
-    try:
-        n = len(store.export_parquet("qfq"))
-        report.notes.append(f"已导出 {n} 个日线文件到 data/bars/qfq/")
-    except Exception as exc:  # noqa: BLE001
-        report.notes.append(f"parquet 导出跳过: {exc}")
+    if not incremental:
+        try:
+            n = len(store.export_parquet("qfq"))
+            report.notes.append(f"已导出 {n} 个日线文件到 data/bars/qfq/")
+        except Exception as exc:  # noqa: BLE001
+            report.notes.append(f"parquet 导出跳过: {exc}")
+    else:
+        report.notes.append("增量同步跳过全量 parquet 导出")
 
     counts = store.counts()
     report.listings = counts["listings"]
@@ -351,7 +354,7 @@ def _sync_detail_financials(
     for symbol in symbols:
         if resume and store.job_status(job, symbol) == "missing":
             continue
-        if resume and store.last_ok(job, symbol) is not None and not _needs_detail(store, symbol):
+        if resume and store.last_ok(job, symbol) is not None:
             continue
         if not _needs_detail(store, symbol):
             store.set_state(job, symbol, last_ok=now_shanghai().date(), status="ok")

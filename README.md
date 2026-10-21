@@ -104,29 +104,32 @@ zk data sync --universe csi800 --years 3 --workers 4
 # 全市场：zk data sync --universe all --years 3
 # 中断后续传：同一 ZHIKU_KB 再跑（默认 --resume）；挂死标的记 missing，不插值
 zk factor prepare
-zk factor train
-zk --provider live daily --date 2026-10-20
-zk --provider live backtest multifactor
+zk factor train          # 对比 lgb_lite 与 Alpha158，按 RankIC/IC/ICIR 选默认；按月重训
+zk --provider live daily --date 2026-10-21
+# 交易日 cron（Asia/Shanghai 15:30）：
+# 30 15 * * 1-5 TZ=Asia/Shanghai ZHIKU_KB=/path/to/kb zk --provider live run-daily
 ```
 
-- A 股：列表（含 ST、停牌、上市/退市日）、沪深300/中证500/中证1000/科创50/中证800 成分、前复权+不复权日线（成交额/换手）、利润表/资产负债表/现金流量表（带**公告日**，PIT 对齐）、整表分红。
-- 港美：`--include-global` 时按配置拉恒生、恒生科技、标普500、纳指100 成分的日线与主要财务（yfinance 无公告日则记缺数据）。
-- 主源 akshare，日线备用 baostock 子进程（18s 超时 terminate）/ tushare（`TUSHARE_TOKEN`）。任何字段拿不到就「缺数据」，不插值。
+- A 股：列表（含 ST、停牌、上市/退市日）、指数成分、前复权+不复权日线、东财整表 + **新浪三大表明细**（营业利润/流动资产负债/固定资产，公告日 PIT）、整表分红（股息率用「每10股派息/收盘」或官方股息率，不再把派息当市值比）。
+- 港美：`--include-global` 时按配置拉恒生、恒生科技、标普500、纳指100。
+- 主源 akshare，日线备用 baostock 子进程 / tushare（`TUSHARE_TOKEN`）。FRED / X 无 token 就跳过并标注。
+- live 新闻/宏观**不混入**离线样本；宏观日历解析前值/预期/今值。
+- 经典公式（Greenblatt / Piotroski / 分红）只用可交易过滤，不套 ROE/PE 质量门槛；门槛可配。
 - live 回测用本地库历史价，加交易成本，涨停不可买入、跌停不可卖出。
-- 没训练模型时日报写 **未训练**，只用公式分。
 
-**首次同步耗时（本仓库云主机实测，中证800、近 3 年，跳过港美）：**
+**本仓库云主机实测（中证800，近 3 年，跳过港美）：**
 
 | 步骤 | 耗时 | 结果 |
 | --- | --- | --- |
-| `zk data sync --universe csi800 --years 3 --workers 4 --skip-global` | 约 **40–70 分钟**（东财 hist 挂死后改 baostock；含一次断点续传共 4093s） | 成分 800，qfq 日线 798/801，不复权 800/801，整表财报 48/48 期，分红 12 期 |
-| `zk factor prepare` | ~5s | 799 个 qlib bin |
-| `zk factor train` | ~5s | pandas+LightGBM（未装 pyqlib，不是 Alpha158） |
-| `zk --provider live daily --date 2026-10-20` | ~16s | 股票池 801，缺数据约 9% |
+| 首次 `zk data sync --universe csi800 --years 3 --workers 4 --skip-global` | 约 40–70 分钟 | 成分 800，qfq ≈798/801 |
+| 新浪明细财务（CSI800） | 约 25 分钟 | ebit 覆盖约 710/800，流动资产约 634/800 |
+| `zk data sync --incremental`（已同步池） | **1.5s** | 截面写当日日线，不逐只 hist |
+| `zk factor train` | ~40s | lgb_lite IC 0.051 RankIC 0.026；Alpha158 IC 0.007 RankIC 0.025 ICIR 0.183；默认 lgb_lite |
+| `zk --provider live daily --date 2026-10-21` | ~110–120s | 池 801，缺数据 0.8%；三经典公式各 30 只；新闻 132；日历 64 |
 
-A 股全市场（`--universe all`）未在本机跑通，预计数小时，请用 `--resume`。东财日线接口在部分网络会连续失败，同步会熔断改 baostock。科创板/创业板涨跌停阈值按代码识别，ST 只认名称或代码前缀，不把 NaN 退市日当成 ST。
+A 股全市场（`--universe all --resume`）本机未跑完：约 17%（~3000/17442）时预计全量再 2.5–3 小时。每日增量对已入库标的应在 10 分钟内（实测 CSI800 1.5s）。东财 hist 会熔断改 baostock。
 
-东财整表利润表没有营业利润/流动资产/固定资产时，Greenblatt 与 Piotroski 会因缺字段为空（不编造）；多因子仍可用 ROE/动量。配置见 `config/data_sync.example.yaml`。
+分红旧实现把「每10股派息」当成现金总额/市值，中证800会空篮；已修正。配置见 `config/data_sync.example.yaml` 与 `pipeline.yaml` 的 `dividend.*`。
 
 ## 命令
 
@@ -136,6 +139,7 @@ A 股全市场（`--universe all`）未在本机跑通，预计数小时，请�
 | --- | --- |
 | `zk screen [greenblatt\|piotroski\|dividend\|multifactor\|all]` | 经典选股公式 |
 | `zk daily` | 选股→打分→回测闸门→AI 审核→新闻/宏观分析 |
+| `zk run-daily` | 非交易日跳过；增量同步→月度重训→daily→≤150 行摘要 |
 | `zk news [--kind all\|premarket-ah\|premarket-us\|midday]` | 新闻雷达（分析为主体，链接附后） |
 | `zk macro` | 宏观锚点：日历、预期差、剧本、传导链、事件窗口 |
 | `zk check --at 1455` | 14:55 判定；close 规则仅 PREVIEW |

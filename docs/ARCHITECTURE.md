@@ -4,33 +4,32 @@
 
 ```mermaid
 flowchart TD
-  ak[akshare / yfinance / baostock / tushare] --> sync[zk data sync]
-  sync --> store[ZHIKU_KB/data SQLite+parquet]
+  ak[akshare 东财整表 / 新浪三大表 / yfinance / baostock / tushare] --> sync[zk data sync]
+  sync --> store[ZHIKU_KB/data SQLite]
   store --> liveUni[live 股票池 PIT 公告日]
   fixtures[Fixture YAML/CSV] --> fixUni[fixture 股票池]
-  liveUni --> screens[选股公式]
+  liveUni --> screens[选股公式 可交易过滤]
   fixUni --> screens
   store --> prepare[zk factor prepare]
   prepare --> qlibDir[qlib bin]
-  qlibDir --> train[zk factor train Alpha158+LGB]
+  qlibDir --> train[zk factor train 对比 Alpha158 与 lgb_lite]
   store --> train
-  train --> models[ZHIKU_KB/models]
+  train --> models[ZHIKU_KB/models selected.pkl]
   models --> merge[公式分 + qlib 分]
   screens --> merge
   store --> backtest[回测闸门 真实价+成本+涨跌停]
   merge --> backtest
-  backtest --> daily[zk daily]
-  newsSrc[分级信源] --> news[新闻雷达]
-  xWatch[X大V YAML名单] --> news
-  macroSrc[日历 / FRED / 期货近似] --> macro[宏观锚点]
+  backtest --> daily[zk daily / zk run-daily]
+  rss[官方RSS + 媒体RSS + akshare快讯] --> news[新闻雷达 不混fixture]
+  xWatch[X大V 无token跳过] --> news
+  cal[华尔街见闻日历 前值/预期/今值] --> macro[宏观锚点]
   news --> analyze[分析层 LLM或规则模板]
   macro --> analyze
-  analyze --> reports[本地 markdown/JSON]
+  analyze --> reports[reports + brief≤150行]
+  daily --> reports
   macro --> windows[事件窗口]
   windows --> triggers[触发线 check/close]
-  windows --> news
   triggers --> hitrate[zk review]
-  macro --> hitrate
 ```
 
 ## 真实数据路径
@@ -60,13 +59,13 @@ flowchart LR
   models --> dailyLive
 ```
 
-启动：`zk data sync`（默认中证800、3 年、可 `--resume` / `--workers`）→ `zk factor prepare` → `zk factor train` → `zk --provider live daily`。fixture 模式仍读 `examples/fixtures`，不碰本地库。
+启动：`zk data sync`（默认中证800、3 年、可 `--resume` / `--incremental` / `--workers`）→ `zk factor prepare` → `zk factor train` → `zk --provider live daily` 或 cron `zk run-daily`。fixture 模式仍读 `examples/fixtures`，不碰本地库。
 
 ## 包布局
 
-- `zhiku/data`：`zk data sync` 增量落地到 `ZHIKU_KB/data`（列表、指数成分、前复权/不复权日线、三张报表+公告日、整表分红）。缺字段记 `MissingData`，不插值、不进 git。baostock 走独立进程，超时 kill，避免把登录连接挂死。
-- `zhiku/screens`：Greenblatt / Piotroski / 低估值高分红 / 质量+动量，以及质量门槛。
-- `zhiku/factors`：本地库 → qlib bin；Alpha158+LightGBM（无 pyqlib 则 pandas 特征+LGB）；没模型日报写「未训练」。
+- `zhiku/data`：`zk data sync` 增量落地到 `ZHIKU_KB/data`（列表、指数成分、日线、东财整表 + 新浪明细、整表分红）。增量用当日截面写一根日线，避免逐只 hist。缺字段记 `MissingData`，不插值、不进 git。
+- `zhiku/screens`：Greenblatt / Piotroski / 低估值高分红（`require_quality=false`）/ 质量+动量。
+- `zhiku/factors`：本地库 → qlib bin；同时训 Alpha158 与 lgb_lite，按 RankIC/IC/ICIR 写 `selected.pkl`；按月重训。
 - `zhiku/backtest`：live 用本地库价格；成本/滑点；涨停不可买、跌停不可卖；公告日 PIT + 退市截断。
 - `zhiku/news`：扫描、聚合、价量确认、**信源分级**、X 大V 跟踪、机会、分析层。
 - `zhiku/events`：预期差、新颖度/半衰期（历史事件研究估算）、拥挤度、产业链 YAML/CSV+地缘传导、失效/时间止损、黑天鹅协议、PIT 财务、只追加决策日志。应急模式对触发线禁加。

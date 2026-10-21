@@ -147,9 +147,16 @@ def run_daily(
             notes.append("缺 monthly_prices.csv，跳过回测闸门。")
 
     formula = formula_scores(
+        ScreenBundle(bundle.universe_size, bundle.quality_passed, bundle.quality, bundle.screens)
+    )
+    # 过闸公式参与默认排序权重；未过闸仍保留分项，避免候选只剩量化分
+    merge_formula = formula_scores(
         ScreenBundle(bundle.universe_size, bundle.quality_passed, bundle.quality, active_screens)
     )
-    merged = merge_scores(names, formula, qlib_scores, settings.merge)
+    if not merge_formula and formula:
+        merge_formula = formula
+        notes.append("全部公式回测未过闸，候选仍展示公式分，但不当作过闸信号。")
+    merged = merge_scores(names, merge_formula, qlib_scores, settings.merge)
     result.screens = {
         name: [
             {"symbol": r.symbol, "name": r.name, "score": r.score, "breakdown": r.breakdown}
