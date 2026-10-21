@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import pandas as pd
 
+from datetime import date
+
 from zhiku.backtest.style_attrib import (
+    _window_excess,
     apply_ew_12_1_switch,
     ew_index_12_1,
     industry_excess_table,
@@ -101,3 +104,11 @@ def test_industry_table_and_month_returns_align() -> None:
     assert table
     assert all(f["end"] if False else True for f in [{}])
     assert TEST_START.year == 2025
+
+
+def test_window_excess_accepts_string_index() -> None:
+    nav = pd.Series([1.0, 1.1, 1.2], index=["2025-01-31", "2025-06-30", "2025-12-31"])
+    bench = pd.Series([1.0, 1.05, 1.08], index=["2025-01-31", "2025-06-30", "2025-12-31"])
+    xs = _window_excess(nav, bench, date(2025, 1, 1), date(2025, 12, 31))
+    assert xs is not None
+    assert abs(xs - ((1.2 / 1.0) - (1.08 / 1.0))) < 1e-9

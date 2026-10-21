@@ -267,9 +267,16 @@ def apply_ew_12_1_switch(
     return out
 
 
+def _as_dt_index(s: pd.Series) -> pd.Series:
+    out = s.copy()
+    out.index = pd.to_datetime(out.index)
+    return out.sort_index()
+
+
 def _window_excess(nav: pd.Series, bench: pd.Series, start: date, end: date) -> float | None:
-    n = nav.dropna().astype(float)
-    b = bench.reindex(n.index).dropna().astype(float)
+    n = _as_dt_index(nav.dropna().astype(float))
+    b = _as_dt_index(bench.dropna().astype(float)).reindex(n.index).dropna()
+    n = n.reindex(b.index).dropna()
     common = n.index.intersection(b.index)
     common = common[(common >= pd.Timestamp(start)) & (common <= pd.Timestamp(end))]
     if len(common) < 2:
@@ -438,8 +445,8 @@ def _nav_from_result(bt) -> pd.Series:
     if not eq:
         return pd.Series(dtype=float)
     if isinstance(eq, pd.Series):
-        return eq
-    return pd.Series({pd.Timestamp(a): b for a, b in eq})
+        return _as_dt_index(eq)
+    return _as_dt_index(pd.Series({pd.Timestamp(a): b for a, b in eq}))
 
 
 def _eval_regime(
