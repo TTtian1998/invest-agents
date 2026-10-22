@@ -11,7 +11,7 @@ import pandas as pd
 
 from zhiku.data.compute import pick_num, ratio
 from zhiku.data.store import MarketStore
-from zhiku.factors.features import FEATURE_NAMES, make_feature_panel
+from zhiku.factors.features import make_feature_panel
 
 # 冻结分割。改日期等于换测试集，消融结束后不得再动。
 TRAIN_END = date(2025, 4, 30)

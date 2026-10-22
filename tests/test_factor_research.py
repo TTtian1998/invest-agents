@@ -13,6 +13,7 @@ from zhiku.factors.dataset import (
     TRAIN_END,
     VALID_END,
     assign_split,
+    excess_vs_industry,
     excess_vs_pool,
     label_open_horizon,
     label_t2_close,
@@ -21,7 +22,6 @@ from zhiku.factors.dataset import (
     neutralize,
     split_of,
 )
-from zhiku.factors.dataset import TEST_START, excess_vs_industry
 from zhiku.factors.experiment import (
     BASELINE,
     CANDIDATES,
@@ -50,7 +50,6 @@ def test_t2_label_is_next_day_to_day_after() -> None:
 
 
 def test_t20_excess_subtracts_same_day_mean() -> None:
-    idx = pd.to_datetime(["2024-01-31", "2024-02-29", "2024-03-31"] + ["2024-04-30"] * 1)
     # simpler: two names, known 5-day path
     dates = pd.bdate_range("2024-01-02", periods=25)
     rows = []
