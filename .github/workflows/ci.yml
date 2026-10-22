@@ -17,10 +17,20 @@ jobs:
       - name: Install
         run: |
           python -m pip install -U pip
-          python -m pip install -e ".[dev]"
+          python -m pip install -e ".[dev,ui,legacy-ui]"
       - name: Ruff
         run: ruff check src tests
       - name: Mypy（宽松）
         run: mypy src/zhiku
       - name: Pytest（默认离线）
         run: pytest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Frontend pure-view tests
+        run: node --test tests/frontend/*.test.mjs
+      - name: Build wheel and verify packaged UI assets
+        run: |
+          python -m pip wheel --no-deps --wheel-dir dist .
+          python -c "import glob, zipfile; p=glob.glob('dist/zhiku-*.whl')[0]; z=zipfile.ZipFile(p); names=z.namelist(); required=['zhiku/app/static/index.html','zhiku/app/static/app.js','zhiku/app/static/views.js','zhiku/app/static/ui.js','zhiku/app/static/workspace.css','zhiku/app/static/favicon.svg','zhiku/pipeline/default.yaml','zhiku/notify/templates/_analysis.md.j2']; assert all(names.count(n)==1 for n in required), names"
