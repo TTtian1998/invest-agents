@@ -119,6 +119,10 @@ function renderTrust() {
   else exp.removeAttribute("tabindex");
 }
 async function load({ feedback = false } = {}) {
+  // A previous success message must not survive a new, failed or invalid read.
+  clearTimeout(toastTimer);
+  $("#toast").hidden = true;
+  $("#toast").textContent = "";
   const id = ++state.request;
   state.loading = true;
   $("#export").setAttribute("aria-disabled", "true");
@@ -145,7 +149,8 @@ async function load({ feedback = false } = {}) {
     state.data = data;
     renderTrust();
     render();
-    if (feedback) notify("快照已重新读取，未触发数据采集或模型运行。");
+    if (feedback && data.report.state === "ready")
+      notify("快照已重新读取，未触发数据采集或模型运行。");
   } catch (error) {
     if (id !== state.request) return;
     state.data = null;
@@ -157,6 +162,7 @@ async function load({ feedback = false } = {}) {
     $("#export").setAttribute("aria-disabled", "true");
     $("#export").setAttribute("tabindex", "-1");
     $("#mode-badge").textContent = "连接中断";
+    $("#heading-eyebrow").textContent = "研究工作台";
     $("#footer-snapshot").textContent = "未能确认当前数据";
     $("#nav-count").textContent = "—";
     $("#content").setAttribute("aria-busy", "false");

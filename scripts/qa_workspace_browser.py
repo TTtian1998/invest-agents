@@ -257,6 +257,12 @@ def run_browser(base: str, kb: Path, output: Path, result: dict[str, Any]) -> No
                                                                    "evidence": "消息与证据", "validation": "研究验证"}[target])
                     ready()
 
+                def refresh_with_success_toast() -> None:
+                    page.get_by_role("button", name="刷新", exact=True).click()
+                    ready()
+                    expect(page.locator("#toast")).to_be_visible()
+                    expect(page.locator("#toast")).to_contain_text("快照已重新读取")
+
                 try:
                     page.goto(base, wait_until="networkidle")
                     ready()
@@ -307,14 +313,20 @@ def run_browser(base: str, kb: Path, output: Path, result: dict[str, Any]) -> No
                     expect(page.locator("tbody tr")).to_have_count(0)
                     expect(page.locator("#content")).to_contain_text("没有")
                     capture("10-empty")
+                    refresh_with_success_toast()
                     page.locator("#snapshot-select").select_option(INVALID)
                     ready()
                     expect(page.locator("#content")).to_contain_text("校验未通过")
                     expect(page.locator("#export")).to_have_attribute("aria-disabled", "true")
                     expect(page.locator("#content")).not_to_contain_text("990001")
+                    assert page.locator("#toast").is_hidden(), "Invalid snapshot retained success toast"
+                    page.get_by_role("button", name="刷新", exact=True).click()
+                    ready()
+                    assert page.locator("#toast").is_hidden(), "Invalid report refresh showed success toast"
                     capture("11-invalid-report")
                     page.locator("#snapshot-select").select_option("latest")
                     ready()
+                    refresh_with_success_toast()
                     latest = kb / "reports" / "latest-daily.json"
                     saved = latest.read_bytes()
                     try:
@@ -323,16 +335,20 @@ def run_browser(base: str, kb: Path, output: Path, result: dict[str, Any]) -> No
                         ready()
                         expect(page.locator("#content")).to_contain_text("还没有研究快照")
                         expect(page.locator("#export")).to_have_attribute("aria-disabled", "true")
+                        assert page.locator("#toast").is_hidden(), "Missing report retained success toast"
                         capture("12-missing-report")
                     finally:
                         latest.write_bytes(saved)
                     # Inject a transport failure only in the browser, leaving the real server unchanged.
+                    # Seed a fresh success toast, then assert immediately rather than waiting for its timer.
+                    refresh_with_success_toast()
                     page.route("**/api/workspace*", lambda route: route.abort("failed"))
                     page.get_by_role("button", name="刷新", exact=True).click()
                     ready()
                     expect(page.locator("#content")).to_contain_text("连接暂时不可用")
                     expect(page.locator("#content")).not_to_contain_text("DEMO03.US")
                     expect(page.locator("#export")).to_have_attribute("aria-disabled", "true")
+                    assert page.locator("#toast").is_hidden(), "Transport failure retained success toast"
                     capture("13-api-failure")
                     page.unroute("**/api/workspace*")
                     page.get_by_role("button", name="刷新", exact=True).click()
