@@ -60,9 +60,10 @@ def run_ai_layer(
         return None, pack_path, notes
 
     notes.append(f"AI 研判后端={engine.name}")
-    if callable(getattr(engine, "complete_review_pack", None)):
+    complete_review_pack = getattr(engine, "complete_review_pack", None)
+    if callable(complete_review_pack):
         try:
-            result = engine.complete_review_pack(pack)
+            result = complete_review_pack(pack)
         except Exception as exc:  # noqa: BLE001
             notes.append(f"Cursor/打包研判失败，不装成已判断：{redact_secret(str(exc))}")
             return None, pack_path, notes
@@ -81,7 +82,8 @@ def run_ai_layer(
     judgments: list[Judgment] = []
     judge_n = int(getattr(settings.ai, "judge_n", 10) or 10)
     for i, cand in enumerate(candidates[:judge_n], start=1):
-        row = by.get(cand.get("symbol"))
+        symbol = cand.get("symbol")
+        row = by.get(symbol) if symbol is not None else None
         if row is None:
             continue
         try:

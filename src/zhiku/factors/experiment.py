@@ -109,6 +109,7 @@ class _PoolCache:
     def universe(self, store: MarketStore, asof: date) -> tuple[list[str], dict]:
         if self.score_syms is None:
             self.score_syms, self.membership = pit_symbols(store, asof)
+        assert self.membership is not None
         return self.score_syms, self.membership
 
     def train_syms(self, store: MarketStore, cfg: ExperimentConfig, asof: date) -> list[str]:
