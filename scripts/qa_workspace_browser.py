@@ -276,10 +276,10 @@ def run_browser(base: str, kb: Path, output: Path, result: dict[str, Any]) -> No
                     assert_notes_wrap(page)
                     capture("07-validation")
                     page.get_by_text("查看快照标识与验收元数据", exact=True).click()
-                    expect(page.locator("details.disclosure")).to_have_attribute("open", "")
+                    expect(page.locator("#content details.disclosure")).to_have_attribute("open", "")
                     capture("07b-validation-metadata")
                     page.get_by_text("查看快照标识与验收元数据", exact=True).click()
-                    expect(page.locator("details.disclosure")).not_to_have_attribute("open", "")
+                    expect(page.locator("#content details.disclosure")).not_to_have_attribute("open", "")
                     page.go_back()
                     expect(page).to_have_url(base + "/#evidence")
                     page.go_forward()
@@ -492,12 +492,12 @@ def run_pipeline_browser(base: str, output: Path, result: dict[str, Any]) -> Non
                         if route == "validation":
                             assert_notes_wrap(page)
                             page.get_by_text("查看快照标识与验收元数据", exact=True).click()
-                            expect(page.locator("details.disclosure")).to_have_attribute("open", "")
+                            expect(page.locator("#content details.disclosure")).to_have_attribute("open", "")
                             assert_no_overflow(page, f"pipeline/{name}/05b-validation-metadata")
                             page.screenshot(path=directory / "05b-validation-metadata.png", full_page=True, animations="disabled")
                             scenario["screenshots"].append(f"pipeline/{name}/05b-validation-metadata.png")
                             page.get_by_text("查看快照标识与验收元数据", exact=True).click()
-                            expect(page.locator("details.disclosure")).not_to_have_attribute("open", "")
+                            expect(page.locator("#content details.disclosure")).not_to_have_attribute("open", "")
                     assert not errors, errors
                     assert all(url.startswith(base + "/") for url in requests), requests
                     scenario["status"] = "passed"
