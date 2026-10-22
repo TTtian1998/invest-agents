@@ -1,0 +1,110 @@
+# X 财经大V 关注名单（公开账号示例）。
+# 复制到 ZHIKU_KB/config/x_accounts.yaml 后由 live 采集使用；仓库内这份不含任何私有名单。
+# 分类：
+#   newswire     快讯
+#   macro_fed    美联储/宏观
+#   institutional 机构大佬（有利益关系，按三级信源辩证审查）
+#   flow_trader  交易/资金流
+#   contrarian   反向参考
+#
+# known_holdings 只填公开披露的代码（13F/基金持仓网页），不要写数量。
+# 示例名单留空，避免把真实持仓明细写进仓库。
+
+max_posts_per_account: 8
+lookback_hours: 36
+throttle_seconds: 0.8
+resonance_min_accounts: 3
+extreme_share: 0.80
+
+accounts:
+  # —— 快讯 ——
+  - handle: DeItaone
+    category: newswire
+    name: Walter Bloomberg
+  - handle: FirstSquawk
+    category: newswire
+  - handle: SquawkCNBC
+    category: newswire
+    name: CNBC Squawk
+  - handle: zerohedge
+    category: newswire
+    name: ZeroHedge
+
+  # —— 美联储 / 宏观 ——
+  - handle: NickTimiraos
+    category: macro_fed
+    name: Nick Timiraos
+  - handle: elerianm
+    category: macro_fed
+    name: Mohamed El-Erian
+  - handle: biancoresearch
+    category: macro_fed
+    name: Bianco Research
+  - handle: MacroAlf
+    category: macro_fed
+  - handle: LynAldenContact
+    category: macro_fed
+    name: Lyn Alden
+  - handle: RayDalio
+    category: macro_fed
+    name: Ray Dalio
+  - handle: LizAnnSonders
+    category: macro_fed
+    name: Liz Ann Sonders
+  - handle: lisaabramowicz1
+    category: macro_fed
+    name: Lisa Abramowicz
+  - handle: TheStalwart
+    category: macro_fed
+    name: Joe Weisenthal
+  - handle: KobeissiLetter
+    category: macro_fed
+  - handle: charliebilello
+    category: macro_fed
+    name: Charlie Bilello
+
+  # —— 机构大佬（三级审查；持仓以公开披露为准，此处不内嵌明细）——
+  - handle: michaeljburry
+    category: institutional
+    name: Michael Burry
+    known_holdings: []
+    conflicts: 对冲基金经理（公开身份）；观点可能与基金持仓同向或对冲。不读取真实账户、不写数量。
+  - handle: BillAckman
+    category: institutional
+    name: Bill Ackman
+    known_holdings: []
+    conflicts: 对冲基金经理（公开身份）；观点可能与基金持仓同向或对冲。不读取真实账户、不写数量。
+  - handle: CathieDWood
+    category: institutional
+    name: Cathie Wood
+    known_holdings: []
+    conflicts: 主动ETF发行人；观点常与基金持仓同向。以公开持仓披露为准，不写数量。
+  - handle: chamath
+    category: institutional
+    name: Chamath Palihapitiya
+    known_holdings: []
+    conflicts: 风险投资者；观点可能与基金/发行人利益绑定。缺数据不编造持仓。
+  - handle: Jkylebass
+    category: institutional
+    name: Kyle Bass
+    known_holdings: []
+    conflicts: 对冲基金经理（公开身份）；观点可能与基金持仓同向或对冲。不读取真实账户、不写数量。
+  - handle: GoldmanSachs
+    category: institutional
+    name: Goldman Sachs
+    known_holdings: []
+    conflicts: 投行/卖方，可能有承销、做市或客户关系；观点不能单独当事实。
+
+  # —— 交易 / 资金流 ——
+  - handle: unusual_whales
+    category: flow_trader
+    name: Unusual Whales
+  - handle: markminervini
+    category: flow_trader
+    name: Mark Minervini
+
+  # —— 反向参考 ——
+  - handle: jimcramer
+    category: contrarian
+    name: Jim Cramer
+    notes: 情绪反向参考，不作为正方依据。

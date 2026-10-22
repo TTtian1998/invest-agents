@@ -1,0 +1,101 @@
+# zhiku 架构
+
+胶水层，不重复造行情轮子。触发线是纯 Python 确定性路径；LLM 只出现在审核与新闻/宏观分析层。
+
+```mermaid
+flowchart TD
+  ak[akshare 东财整表 / 新浪三大表 / yfinance / baostock / tushare] --> sync[zk data sync]
+  sync --> store[ZHIKU_KB/data SQLite]
+  store --> liveUni[live 股票池 PIT 公告日]
+  fixtures[Fixture YAML/CSV] --> fixUni[fixture 股票池]
+  liveUni --> screens[选股公式 可交易过滤]
+  fixUni --> screens
+  store --> prepare[zk factor prepare]
+  prepare --> qlibDir[qlib bin]
+  qlibDir --> train[zk factor train 对比 Alpha158 与 lgb_lite]
+  store --> train
+  train --> models[ZHIKU_KB/models selected.pkl]
+  models --> merge[公式分 + qlib 分]
+  screens --> merge
+  store --> backtest[回测闸门 真实价+成本+涨跌停]
+  merge --> backtest
+  backtest --> daily[zk daily / zk run-daily]
+  rss[官方RSS + 媒体RSS + akshare快讯] --> news[新闻雷达 不混fixture]
+  xWatch[X大V 无token跳过] --> news
+  cal[华尔街见闻日历 前值/预期/今值] --> macro[宏观锚点]
+  news --> analyze[分析层 LLM或规则模板]
+  macro --> analyze
+  analyze --> reports[reports + brief≤150行]
+  daily --> reports
+  macro --> windows[事件窗口]
+  windows --> triggers[触发线 check/close]
+  triggers --> hitrate[zk review]
+```
+
+## 真实数据路径
+
+```mermaid
+flowchart LR
+  subgraph sources [源]
+    ak[akshare 东财整表]
+    bs[baostock 子进程日线]
+    yf[yfinance 港美]
+    ts[tushare 可选]
+  end
+  subgraph kb [ZHIKU_KB 不进 git]
+    sqlite[(data/market.sqlite)]
+    pq[data/bars parquet]
+    qlib[data/qlib bin]
+    models[models/*.pkl]
+  end
+  ak --> sqlite
+  bs --> sqlite
+  yf --> sqlite
+  ts --> sqlite
+  sqlite --> pq
+  sqlite --> qlib
+  qlib --> models
+  sqlite --> dailyLive[zk --provider live daily]
+  models --> dailyLive
+```
+
+启动：`zk data sync`（默认中证800、3 年、可 `--resume` / `--incremental` / `--workers`）→ `zk factor prepare` → `zk factor train` → `zk --provider live daily` 或 cron `zk run-daily`。fixture 模式仍读 `examples/fixtures`，不碰本地库。
+
+## 包布局
+
+- `zhiku/data`：`zk data sync` 增量落地到 `ZHIKU_KB/data`。增量截面只写不复权；前复权按上一根 qfq × (当日 none / 上日 none) 平移，禁止把原始收盘写入 qfq。缺字段记 `MissingData`，不插值、不进 git。
+- `zhiku/screens`：Greenblatt / Piotroski / 低估值高分红（`require_quality=false`）/ 质量+动量。未过闸公式分不进总分。
+- `zhiku/factors`：本地库 → qlib bin；同时训 Alpha158 与 lgb_lite；标签为 T+1 开到 T+k 收（lite）或 T+1 收到 T+2 收（Alpha158）；按 RankICIR→RankIC 均值写 `selected.pkl`；报告五分位。
+- `zhiku/backtest`：live 用本地库前复权；清洗末日复权混入；成本/滑点；涨跌停；对照全池等权与 510300/000300/000906；超额与合理性断言。
+- `zhiku/news`：扫描、聚合、价量确认、**信源分级**、X 大V 跟踪、机会（理由/失效/时间止损/信源，含 A 股代码挂接）、分析层。live 现价与基本面来自本地库。
+- `zhiku/events`：预期差、新颖度、拥挤、传导、失效/时间止损、黑天鹅。应急必须 VIX/指数价格确认，关键词单独不触发。live 不读 blackswan/consensus fixture。
+- `zhiku/macro`：核心日历白名单、公开 FOMC 补充、预期差、剧本、窗口、利率。live 利率/地缘无真实数据则「缺数据」。
+- `zhiku/analyze.py`：共享分析卡片；无 key 降级并标「未做深度分析」。
+- `zhiku/engine`：触发线与成长仓闸门；LLM 不进入。
+- `zhiku/app`：Streamlit，含「今日舆情」「大V动态」「多空机会」「宏观与事件」。
+
+## 信源分级
+
+`news/grades.yaml` 定义 1–4 级别名、权重、官方 RSS。打分用 `grade_weight`；标签用 `tag_with_grades`：
+
+- 「事实」需要一级，或二级转述且已回溯官方，或两条独立二级且非知情人士。
+- 三级不能单独成事实，也不能单独进质量档；必须带 `InstitutionReview` 五个字段。
+- 社交只做情绪。
+- 「据知情人士」→「未经官方证实」，`followups` 跟踪确认/否认。
+- X 大V：`newswire` 匹配一/二级才标事实；`institutional` 三级审查（持仓代码+利益关系）；`macro_fed` 在 FOMC 窗口加权；共振/反向风险；按账号命中率调权。
+
+## 缺数据
+
+`MissingData` 贯穿行情、预期、宏观实际值。没有一致预期就不算 surprise z，报告写「缺数据」，不插值、不编造。
+
+## 隐私
+
+`ZHIKU_KB` 指向仓库外知识库。示例持仓仅用于 demo。新闻/宏观对持仓只映射代码与行业，模板禁止输出 qty/cost。
+
+## 时区
+
+对外时间 Asia/Shanghai。宏观日历同时标注影响 A / H / 美哪个交易时段。美股价格保留美东交易日。
+
+## 测试
+
+默认 `pytest -m "not network"`。网络烟测需显式选中。分析层测试覆盖无 key 降级与字段完整性；新闻测试覆盖分级打分与三级审查字段；事件层覆盖缺预期、T+1 可执行、拥挤分组、传导 hop、到期「未兑现，撤」、应急清单、PIT 无前视。回测闸门测试：任一调仓日只用当时已公告数据，禁止今日静态名单；覆盖不足标「数据不足」。今日静态 Top-N 表与中间 PIT（样本 1034）已作废。

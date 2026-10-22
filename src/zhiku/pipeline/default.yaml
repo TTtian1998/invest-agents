@@ -1,0 +1,261 @@
+# 流水线默认参数。用户可在 ZHIKU_KB/config/pipeline.yaml 覆盖。
+# 以下阈值均为研究用默认值，不是投资建议。
+
+universe:
+  exclude_st: true
+  exclude_etf: true
+  min_mktcap_yi: 80          # 亿元人民币等值，低于则视为小市值题材，剔除
+  min_amount_cny:
+    CN: 300000000            # A 股日均成交额 ≥ 3 亿
+    HK: 100000000            # 港股 ≥ 1 亿人民币等值
+    US: 100000000
+
+quality:
+  roe_3y_min: 0.12
+  ocf_positive: true
+  max_debt_asset: 0.70
+  pe_percentile_max: 0.80    # 估值不在历史高位
+  pb_percentile_max: 0.80
+  require_leader_or_roe: true
+
+greenblatt:
+  # Joel Greenblatt《The Little Book That Beats the Market》：ROC + Earnings Yield 排名合成
+  top_n: 30
+  min_score: 0
+  require_quality: false   # 经典公式只用可交易过滤，不套 ROE/PE 质量门槛
+
+piotroski:
+  # Piotroski (2000) F-Score，9 项
+  min_score: 7
+  top_n: 30
+  require_quality: false
+
+dividend:
+  # 连续三年 + 截面分位 + 股息率，全部可配；过严会空篮子
+  pe_percentile_max: 0.40
+  pb_percentile_max: 0.40
+  min_yield: 0.03
+  min_consecutive_years: 3
+  top_n: 30
+  require_quality: false
+
+multifactor:
+  weights:
+    roe: 0.25
+    gm_stability: 0.15
+    ocf_ni: 0.20
+    momentum_12_1: 0.25
+    low_vol: 0.15
+  top_n: 30
+  require_quality: true
+
+graham:
+  top_n: 30
+  min_score: 0
+  require_quality: false
+
+lynch_peg:
+  top_n: 30
+  min_score: 0
+  require_quality: false
+
+canslim:
+  top_n: 30
+  min_score: 0
+  require_quality: false
+
+livermore:
+  top_n: 30
+  min_score: 0
+  require_quality: false
+
+fisher:
+  top_n: 30
+  min_score: 0
+  require_quality: false
+
+sizing:
+  enabled: false
+  name_cap: 0.10
+  stop_pct: 0.08
+
+merge:
+  formula: 0.90
+  qlib: 0.10                 # 测试集 RankIC 为负：仅做过闸公式内排序辅助
+  qlib_floor: 0.10
+  qlib_cap: 0.40
+  rank_ic_threshold: 0.03    # 前瞻实盘 RankIC 达此值滚到上限
+  icir_threshold: 0.20
+  formula_first: true        # 候选前 10 只从过闸公式池取，量化分不单独进池
+
+backtest:
+  rebalance: monthly
+  equal_weight: true
+  cost_bps: 10
+  slippage_bps: 5
+  rf: 0.02
+  benchmark: "universe_ew"   # 超额对同池时点等权
+  benchmark_symbols: ["510300", "000300", "000906"]
+  sanity_max_ann_gap: 0.25
+  min_sharpe: 0.0            # 示例数据较短，默认不因夏普挡掉公式
+  require_beat_benchmark: true
+  require_sharpe_ge_benchmark: true
+  require_half_excess: true   # 前后半段对同池超额都须 > 0
+  fill: next_open             # 调仓日 T 用 T 前数据，T+1 开盘成交
+  n_trials: 9                 # 已测公式数，用于 deflated Sharpe
+  min_coverage: 0.80          # 有持仓的调仓月 / 决策月；不足标数据不足，不是未过闸
+  pit_universe: auto
+  top_n: 3
+
+ai:
+  top_n: 15
+  judge_n: 10          # 研判只看候选前 10
+  backend: auto        # auto / openai / cursor / mock / external
+  masters: [buffett, munger, graham, lynch, fisher, livermore, oneil, marks]
+
+news:
+  enabled: true
+  stop_pct: 0.03
+  max_quality: 5
+  max_trade: 5
+  max_watch: 8
+  max_notional_cny: 50000
+  low_corr_bonus: 0.08
+  poll_seconds: 300
+  unused_thr: 0.01
+  over_thr: 0.04
+  score_weights:
+    surprise: 0.16
+    novelty: 0.10
+    decay: 0.08
+    hist_winrate: 0.12
+    crowding: 0.10
+    source: 0.12
+    price_confirm: 0.10
+    quality: 0.12
+    correlation: 0.08
+    catalyst: 0.02
+  sources:
+    eastmoney_news: true
+    cls: true
+    cninfo: true
+    eastmoney_hot: true
+    lhb: true
+    ratings: true
+    yfinance_news: true
+    finnhub: true
+    rss: true
+    apewisdom: true
+    twitter: true
+    official_rss: true
+    edgar: true
+  rss_feeds:
+    - https://www.cnbc.com/id/100003114/device/rss/rss.html
+    - https://feeds.reuters.com/reuters/businessNews
+    - https://www.caixin.com/rss/latest.xml
+    - https://www.yicai.com/rss/news.xml
+  official_feeds:
+    fed: https://www.federalreserve.gov/feeds/press_all.xml
+    bls: https://www.bls.gov/feed/bls_latest.rss
+    bea: https://www.bea.gov/rss.xml
+    ecb: https://www.ecb.europa.eu/rss/press.html
+    pbc: http://www.pbc.gov.cn/goutongjiaoliu/113456/113469/11040/index1.html
+    stats_cn: https://www.stats.gov.cn/sj/zxfb/rss.xml
+  x_accounts_file: config/x_accounts.yaml
+  x_max_posts: 8
+  x_lookback_hours: 36
+  x_throttle_seconds: 0.8
+  x_resonance_min: 3
+  x_extreme_share: 0.80
+  x_fomc_boost: 1.35
+
+macro:
+  enabled: true
+  freeze_adds_in_window: false
+  window_hint: 事件窗口内，新开仓降仓位/止损放宽或等落地
+  min_window_importance: 4
+  gdelt_enabled: false
+  fedwatch_approx: true
+  horizon_days: 7
+  window_event_types:
+    - US_NFP
+    - US_UNEMP
+    - US_CPI
+    - US_CORE_CPI
+    - US_PCE
+    - US_PPI
+    - US_GDP
+    - US_RETAIL
+    - US_ISM_MFG
+    - FOMC
+    - FOMC_DOTS
+    - ECB
+    - BOJ
+    - BOE
+    - PBOC
+    - CN_CPI
+    - CN_PPI
+    - CN_GDP
+    - CN_SF
+    - CN_LPR
+    - CN_M2
+    - CN_PMI
+    - CN_RRR
+    - CN_RATE
+  windows:
+    FOMC: {before: 1, after: 1}
+    US_NFP: {before: 1, after: 1}
+    US_CPI: {before: 1, after: 1}
+    US_CORE_CPI: {before: 1, after: 1}
+    US_PCE: {before: 1, after: 1}
+    default: {before: 1, after: 1}
+
+data:
+  universe: csi800          # all=A股全市场；csi800 适合首次跑通
+  years: 3
+  sleep_seconds: 0.2
+  retries: 3
+  include_global: true
+  hk_lists: [hsi, hstech]
+  us_lists: [sp500, ndx]
+  extra_symbols: ["510300", "000300", "000906"]   # 沪深300ETF/指数、中证800；回测基准，不含持仓
+  incremental_lookback_days: 2
+  detail_financials: true
+  hist_financials: true          # 带公告日的历史季报/快报/分红/预告（baostock + 东财）
+
+events:
+  enabled: true
+  crowding_high: 0.70
+  crowding_low: 0.30
+  vix_spike: 0.20
+  index_intraday_drop: 0.03
+  emergency_min_sources: 2
+  require_price_confirm: true
+  freeze_adds_on_emergency: true
+  alert_on_emergency: true
+  stale_after_halflives: 1.0
+  half_life_hours:
+    earnings_beat: 48
+    earnings_preview: 72
+    policy: 24
+    sentiment_hot: 6
+    default: 36
+  time_stop_days:
+    earnings_beat: 5
+    policy: 3
+    sentiment_hot: 2
+    default: 5
+  playbook:
+    - 先降风险，不扩大暴露
+    - 不抄底
+    - 等官方表态
+    - 列出受影响持仓代码（不输出数量/成本）和对冲工具
+  emergency_keywords:
+    - 冲突
+    - 制裁
+    - 监管
+    - 袭击
+    - 战争
+    - 熔断
+    - sanction
+    - war

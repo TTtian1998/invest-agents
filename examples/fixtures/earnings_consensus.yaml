@@ -1,0 +1,33 @@
+# 虚构事前一致预期。不是真实分析师预测。
+items:
+  - symbol: "000333"
+    kind: eps
+    consensus: 1.20
+    actual: 1.35
+    sigma: 0.10
+    asof: 2026-10-19
+    source: fixture
+  - symbol: "000333"
+    kind: revenue
+    consensus: 80.0
+    actual: 84.0
+    sigma: 3.0
+    asof: 2026-10-19
+    source: fixture
+  - symbol: AAPL
+    kind: eps
+    consensus: 1.50
+    actual: null
+    sigma: 0.08
+    implied_move: 0.030
+    actual_move: 0.012
+    asof: 2026-10-19
+    source: fixture
+  - event_id: FOMC_2026-10-22
+    symbol: ""
+    kind: macro
+    consensus: 4.25
+    actual: null
+    sigma: 0.25
+    asof: 2026-10-20
+    surprise_missing: 缺数据：尚无实际值

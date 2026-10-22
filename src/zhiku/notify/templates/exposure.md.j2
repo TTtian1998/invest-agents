@@ -1,0 +1,37 @@
+# 成长仓暴露 {{ on }}
+
+- 状态：**{{ snap.status }}**（{{ snap.status_cn }}）
+- 成长仓占比：{{ "%.2f%%"|format(snap.ratio * 100) if snap.ratio is not none else "缺数据" }}
+- 冻结阈值：{{ snap.freeze_threshold }}；解冻阈值：{{ snap.unfreeze_threshold }}（带滞回）
+- 成长仓市值（CNY）：{{ snap.growth_cny if snap.growth_cny is not none else "缺数据" }}
+- 总市值（CNY）：{{ snap.total_cny if snap.total_cny is not none else "缺数据" }}
+- 汇率来自 YAML 手填，不联网。
+
+{% if snap.frozen %}
+全书禁新开仓、禁加（当前处于冻结/维持冻结）。
+{% endif %}
+
+## 持仓（示例数据，非真实账户）
+{% for p in snap.positions %}
+- {{ p.symbol }} {{ p.name }}（{{ p.market.value }}）qty={{ p.qty }}
+  - 最新价：{{ p.price if p.price is not none else "缺数据" }}
+  - 汇率：{{ p.fx if p.fx is not none else "—" }}
+  - 市值 CNY：{{ p.value_cny if p.value_cny is not none else "缺数据" }}
+  - 成长仓：{{ "是" if p.growth else "否" }}
+{% if p.add_blocked %}
+  - **禁加**
+{% endif %}
+{% if p.missing %}
+  - {{ p.missing }}
+{% endif %}
+{% endfor %}
+
+{% if snap.notes %}
+## 备注
+{% for n in snap.notes %}
+- {{ n }}
+{% endfor %}
+{% endif %}
+
+---
+研究与提醒工具，不构成投资建议，不自动下单。

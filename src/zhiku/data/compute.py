@@ -1,0 +1,523 @@
+"""从报表/日线算出选股字段。缺字段保持 None，不插值。"""
+
+from __future__ import annotations
+
+from datetime import date
+from typing import Any
+
+import pandas as pd
+
+from zhiku.models import Market
+from zhiku.screens.fundamentals import Fundamentals
+
+# 东方财富 / yfinance 常见列名。按顺序取第一个能转成数字的。
+_ALIASES: dict[str, tuple[str, ...]] = {
+    "ebit": ("息税前利润", "EBIT", "Operate Profit", "OPERATE_PROFIT", "营业利润"),
+    "interest": ("利息费用", "Interest Expense", "INTEREST_EXPENSE", "财务费用"),
+    "total_profit": ("利润总额", "Pretax Income", "TOTAL_PROFIT", "税前利润"),
+    "net_income": (
+        "净利润",
+        "净利润-净利润",
+        "Net Income",
+        "NETPROFIT",
+        "归母净利润",
+        "归属于母公司股东的净利润",
+    ),
+    "revenue": (
+        "营业总收入",
+        "营业总收入-营业总收入",
+        "营业收入",
+        "Total Revenue",
+        "OPERATE_INCOME",
+    ),
+    "cogs": ("营业成本", "Cost Of Revenue", "OPERATE_COST"),
+    "gross_margin_pct": ("毛利率", "GROSS_MARGIN"),
+    "ocf": (
+        "经营活动产生的现金流量净额",
+        "Operating Cash Flow",
+        "NETCASH_OPERATE",
+        "经营现金流量净额",
+    ),
+    "current_assets": ("流动资产合计", "Current Assets", "TOTAL_CURRENT_ASSETS"),
+    "cash": ("货币资金", "Cash And Cash Equivalents", "MONETARYFUNDS", "Cash"),
+    "current_liab": ("流动负债合计", "Current Liabilities", "TOTAL_CURRENT_LIAB"),
+    "st_debt": ("短期借款", "Short Long Term Debt", "SHORT_LOAN", "短期债务"),
+    "lt_debt": ("长期借款", "Long Term Debt", "LONG_LOAN"),
+    "bonds": ("应付债券", "Bonds Payable", "BOND_PAYABLE"),
+    "current_lt": ("一年内到期的非流动负债", "Current Portion Of Long Term Debt"),
+    "fixed_assets": ("固定资产净额", "固定资产净值", "固定资产", "Net PPE", "FIXED_ASSET"),
+    "total_assets": ("资产总计", "Total Assets", "TOTAL_ASSETS"),
+    "total_liab": ("负债合计", "Total Liab", "TOTAL_LIABILITIES", "负债总计"),
+    "equity": ("股东权益合计", "Stockholders Equity", "TOTAL_EQUITY", "所有者权益合计"),
+    "inventory": ("存货", "Inventory", "INVENTORY"),
+    "receivables": ("应收账款", "Net Receivables", "ACCOUNTS_RECE"),
+    "eps": (
+        "每股收益",
+        "基本每股收益",
+        "EPS",
+        "basicEPS",
+        "epsTTM",
+        "BASIC_EPS",
+        "每股收益-基本每股收益",
+    ),
+    "bps": ("每股净资产", "Book Value Per Share", "BVPS", "BPS", "bvps"),
+    "shares": ("实收资本(或股本)", "Ordinary Shares Number", "SHARE_CAPITAL", "股本", "总股本"),
+    "rd": ("研发费用", "研发支出", "Research And Development", "R&D"),
+    "roe_pct": ("净资产收益率", "ROE"),
+    "debt_asset_pct": ("资产负债率",),
+}
+
+
+def pick_num(payload: dict[str, Any] | None, key: str) -> float | None:
+    if not payload:
+        return None
+    for alias in _ALIASES.get(key, (key,)):
+        if alias in payload:
+            val = _to_float(payload[alias])
+            if val is not None:
+                return val
+        # 大小写不敏感
+        lower = {str(k).lower(): v for k, v in payload.items()}
+        if alias.lower() in lower:
+            val = _to_float(lower[alias.lower()])
+            if val is not None:
+                return val
+    return None
+
+
+def _to_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        if isinstance(value, str) and value.strip() in {"", "-", "None", "nan"}:
+            return None
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    if f != f or f in {float("inf"), float("-inf")}:
+        return None
+    return f
+
+
+def ebit_of(income: dict[str, Any] | None) -> float | None:
+    direct = pick_num(income, "ebit")
+    if direct is not None:
+        return direct
+    total = pick_num(income, "total_profit")
+    interest = pick_num(income, "interest")
+    if total is not None and interest is not None:
+        return total + interest
+    return None
+
+
+def nwc_of(balance: dict[str, Any] | None) -> float | None:
+    ca = pick_num(balance, "current_assets")
+    cash = pick_num(balance, "cash")
+    cl = pick_num(balance, "current_liab")
+    st = pick_num(balance, "st_debt")
+    if ca is None or cl is None:
+        return None
+    # Greenblatt：流动资产-现金-（流动负债-无息流动负债近似用短债加回）
+    cash_v = 0.0 if cash is None else cash
+    st_v = 0.0 if st is None else st
+    return ca - cash_v - (cl - st_v)
+
+
+def nfa_of(balance: dict[str, Any] | None) -> float | None:
+    return pick_num(balance, "fixed_assets")
+
+
+def ncav_of(balance: dict[str, Any] | None) -> float | None:
+    """格雷厄姆 NCAV：流动资产 − 全部负债。缺一项则 None。"""
+    ca = pick_num(balance, "current_assets")
+    tl = pick_num(balance, "total_liab")
+    if ca is None or tl is None:
+        return None
+    return ca - tl
+
+
+def _closes_asof(closes: pd.Series | None, asof=None) -> pd.Series | None:
+    if closes is None or getattr(closes, "empty", True):
+        return None
+    s = closes.dropna().astype(float).sort_index()
+    if asof is not None and len(s) > 0:
+        s = s.loc[: pd.Timestamp(asof)]
+    return None if s.empty else s
+
+
+def dist_to_high(closes: pd.Series | None, window: int = 252, *, asof=None) -> float | None:
+    """距窗口最高收盘的距离。只用 asof（含）之前的收盘；asof 缺省则用整列。"""
+    s = _closes_asof(closes, asof)
+    if s is None or len(s) < 20:
+        return None
+    peak = float(s.iloc[-window:].max()) if len(s) >= 2 else None
+    last = float(s.iloc[-1])
+    if peak is None or peak <= 0:
+        return None
+    return last / peak - 1.0
+
+
+def interest_bearing(balance: dict[str, Any] | None) -> float | None:
+    parts = [
+        pick_num(balance, "st_debt"),
+        pick_num(balance, "lt_debt"),
+        pick_num(balance, "bonds"),
+        pick_num(balance, "current_lt"),
+    ]
+    if all(p is None for p in parts):
+        return None
+    return sum(p or 0.0 for p in parts)
+
+
+def ev_of(mktcap: float | None, balance: dict[str, Any] | None) -> float | None:
+    if mktcap is None:
+        return None
+    debt = interest_bearing(balance)
+    cash = pick_num(balance, "cash")
+    if debt is None and cash is None:
+        return None
+    return mktcap + (debt or 0.0) - (cash or 0.0)
+
+
+def ratio(num: float | None, den: float | None) -> float | None:
+    if num is None or den is None or den == 0:
+        return None
+    return num / den
+
+
+def gross_margin_of(income: dict[str, Any] | None) -> float | None:
+    pct = pick_num(income, "gross_margin_pct")
+    if pct is not None:
+        return pct / 100.0 if pct > 1 else pct
+    rev = pick_num(income, "revenue")
+    cogs = pick_num(income, "cogs")
+    if rev is None or cogs is None or rev == 0:
+        return None
+    return (rev - cogs) / rev
+
+
+def dividend_yield_from_rows(
+    div_df: pd.DataFrame,
+    asof: date,
+    *,
+    raw_close: float | None = None,
+) -> float | None:
+    """优先用整表「现金分红-股息率」；否则 每10股派息/10 / 未复权收盘。
+
+    旧实现把「每10股派 X 元」当成全年现金总额 / 市值，CSI800 会几乎全空。
+    """
+    if div_df is None or getattr(div_df, "empty", True):
+        return None
+    stored: list[float] = []
+    year_dps = 0.0
+    have_amt = False
+    if "yield" in div_df.columns:
+        for _, drow in div_df.iterrows():
+            try:
+                ex = date.fromisoformat(str(drow["ex_date"])[:10])
+            except (ValueError, TypeError):
+                continue
+            if ex > asof or not (asof.year - 1 <= ex.year <= asof.year):
+                continue
+            y = _to_float(drow.get("yield"))
+            if y is None:
+                continue
+            if y > 1:
+                y = y / 100.0
+            if 0 < y < 0.5:
+                stored.append(y)
+    if stored:
+        return float(sum(stored) / len(stored)) if len(stored) > 1 else stored[0]
+    for _, drow in div_df.iterrows():
+        try:
+            ex = date.fromisoformat(str(drow["ex_date"])[:10])
+        except (ValueError, TypeError):
+            continue
+        if asof.year - 1 <= ex.year <= asof.year and drow.get("amount") is not None:
+            amt = _to_float(drow.get("amount"))
+            if amt is None:
+                continue
+            year_dps += amt / 10.0  # fhps 现金分红比例 = 每10股派息
+            have_amt = True
+    if have_amt and raw_close is not None and raw_close > 0:
+        y = year_dps / float(raw_close)
+        if 0 < y < 0.5:
+            return y
+    return None
+
+
+def consecutive_div_years(ex_dates: list[date], asof: date) -> int | None:
+    years = sorted({d.year for d in ex_dates if d <= asof}, reverse=True)
+    if not years:
+        return None
+    if years[0] < asof.year - 1:
+        return 0
+    n = 0
+    expect = years[0]
+    for y in years:
+        if y == expect:
+            n += 1
+            expect -= 1
+        elif y > expect:
+            continue
+        else:
+            break
+    return n
+
+
+def momentum_12_1(closes: pd.Series, *, asof=None) -> float | None:
+    """12−1 动量：收盘[-22]/收盘[-252]−1。只用 asof（含）之前的收盘。"""
+    s = _closes_asof(closes, asof)
+    if s is None or len(s) < 252:
+        return None
+    m1 = float(s.iloc[-22]) if len(s) >= 22 else None
+    m12 = float(s.iloc[-252])
+    if m1 is None or m12 == 0:
+        return None
+    return (m1 / m12) - 1.0
+
+
+def realized_vol(closes: pd.Series, window: int = 60) -> float | None:
+    s = closes.dropna().astype(float).sort_index()
+    if len(s) < window + 1:
+        return None
+    ret = s.pct_change().dropna()
+    if len(ret) < window:
+        return None
+    return float(ret.iloc[-window:].std(ddof=0)) * (252**0.5)
+
+
+def amount_avg(amounts: pd.Series, window: int = 20) -> float | None:
+    s = amounts.dropna().astype(float)
+    if s.empty:
+        return None
+    return float(s.iloc[-window:].mean())
+
+
+def _is_null(value: Any) -> bool:
+    if value is None:
+        return True
+    try:
+        if pd.isna(value):
+            return True
+    except Exception:
+        if value != value:  # NaN
+            return True
+    if isinstance(value, str) and value.strip().lower() in {"", "none", "nan", "nat"}:
+        return True
+    return False
+
+
+def flag_bool(value: Any) -> bool:
+    if _is_null(value):
+        return False
+    if isinstance(value, str) and value.strip().lower() in {"0", "false", "no"}:
+        return False
+    try:
+        if float(value) == 0:
+            return False
+    except (TypeError, ValueError):
+        pass
+    return bool(value)
+
+
+def is_st_label(name: Any, symbol: str = "") -> bool:
+    """仅识别 ST / *ST / S*ST 前缀，避免代码或简称里偶然出现的字母。"""
+    text = str(name or "").upper().replace(" ", "")
+    code = str(symbol or "").upper()
+    if text.startswith("*ST") or text.startswith("S*ST") or text.startswith("ST"):
+        return True
+    return code.startswith("ST") or code.startswith("*ST")
+
+
+def _as_ratio(value: float | None) -> float | None:
+    """报表里 ROE/负债率常为百分数。|x|>1 视为百分数，不把 0.15 再除 100。"""
+    if value is None:
+        return None
+    if abs(value) > 1:
+        return value / 100.0
+    return value
+
+
+def snapshot_from_store(
+    *,
+    symbol: str,
+    asof: date,
+    listing: dict[str, Any],
+    statements: dict[str, dict[str, Any]],
+    prev_income: dict[str, Any] | None,
+    prev_balance: dict[str, Any] | None,
+    spot: dict[str, Any] | None,
+    closes: pd.Series | None,
+    amounts: pd.Series | None,
+    div_years: int | None,
+    div_yield: float | None,
+    shares_issued: bool | None,
+    market: Market = Market.CN,
+    raw_closes: pd.Series | None = None,
+) -> Fundamentals:
+    income = (statements.get("income") or {}).get("payload")
+    balance = (statements.get("balance") or {}).get("payload")
+    cashflow = (statements.get("cashflow") or {}).get("payload")
+    mktcap = None if not spot else _to_float(spot.get("mktcap"))
+    pe = None if not spot else _to_float(spot.get("pe"))
+    pb = None if not spot else _to_float(spot.get("pb"))
+    amount = None if not spot else _to_float(spot.get("amount"))
+    if amount is None and amounts is not None:
+        amount = amount_avg(amounts)
+    last_close = None
+    # 估值用未复权价；前复权只用于动量/波动，避免 qfq 基数把 PE 拉飞
+    px = raw_closes if raw_closes is not None else None
+    if px is not None and not px.dropna().empty:
+        last_close = float(px.dropna().astype(float).iloc[-1])
+    ni = pick_num(income, "net_income")
+    assets = pick_num(balance, "total_assets")
+    equity = pick_num(balance, "equity")
+    ocf = pick_num(cashflow, "ocf")
+    gm = gross_margin_of(income)
+    gm_prev = gross_margin_of(prev_income)
+    roa = ratio(ni, assets)
+    roa_prev = ratio(pick_num(prev_income, "net_income"), pick_num(prev_balance, "total_assets"))
+    current = ratio(pick_num(balance, "current_assets"), pick_num(balance, "current_liab"))
+    current_prev = ratio(
+        pick_num(prev_balance, "current_assets"), pick_num(prev_balance, "current_liab")
+    )
+    lt = ratio(pick_num(balance, "lt_debt"), assets)
+    lt_prev = ratio(pick_num(prev_balance, "lt_debt"), pick_num(prev_balance, "total_assets"))
+    ato = ratio(pick_num(income, "revenue"), assets)
+    ato_prev = ratio(pick_num(prev_income, "revenue"), pick_num(prev_balance, "total_assets"))
+    roe = ratio(ni, equity)
+    if roe is None:
+        roe = _as_ratio(pick_num(income, "roe_pct"))
+    debt_asset = ratio(pick_num(balance, "total_liab"), assets)
+    if debt_asset is None:
+        debt_asset = _as_ratio(
+            pick_num(balance, "debt_asset_pct") or pick_num(income, "debt_asset_pct")
+        )
+    ebit = ebit_of(income)
+    nwc = nwc_of(balance)
+    nfa = nfa_of(balance)
+    ncav = ncav_of(balance)
+    prev_ni = pick_num(prev_income, "net_income")
+    eps_g = ratio(ni - prev_ni, abs(prev_ni)) if ni is not None and prev_ni not in (None, 0) else None
+    rev = pick_num(income, "revenue")
+    rd = pick_num(income, "rd")
+    rd_sales = ratio(rd, rev)
+    eps = pick_num(income, "eps")
+    bps = pick_num(income, "bps") or pick_num(balance, "bps")
+    shares = pick_num(balance, "shares") or pick_num(income, "shares")
+    if shares is not None and shares <= 0:
+        shares = None
+    # 面值约 1 元时，实收资本≈股数；只用已公告科目，不借今日 spot
+    if eps is None and ni is not None and shares:
+        eps = ni / shares
+    if bps is None and equity is not None and shares:
+        bps = equity / shares
+    if mktcap is None and shares is not None and last_close is not None:
+        mktcap = shares * last_close
+    if mktcap is None and equity is not None and bps is not None and bps != 0 and last_close is not None:
+        mktcap = (equity / bps) * last_close
+    if pe is None and last_close is not None and eps is not None and eps != 0:
+        pe = last_close / eps
+    if pb is None and last_close is not None and bps is not None and bps != 0:
+        pb = last_close / bps
+    ev = ev_of(mktcap, balance)
+    name = (spot or {}).get("name") or listing.get("name") or ""
+    st = flag_bool(listing.get("st")) or is_st_label(name, symbol)
+    mom = momentum_12_1(closes) if closes is not None else None
+    vol = realized_vol(closes) if closes is not None else None
+    gm3 = [x for x in (gm_prev, gm) if x is not None]
+    roe3 = [roe] if roe is not None else []
+    return Fundamentals(
+        symbol=symbol,
+        market=market,
+        name=str(name),
+        industry=str(listing.get("industry") or ""),
+        instrument=str(listing.get("instrument") or "stock"),
+        st=st,
+        delist_risk=not _is_null(listing.get("delist_date")),
+        mktcap=mktcap,
+        amount_avg=amount,
+        pe=pe,
+        pb=pb,
+        dividend_yield=div_yield,
+        dividend_years=div_years,
+        roe=roe,
+        roe_3y=roe3,
+        roa=roa,
+        roa_prev=roa_prev,
+        gross_margin=gm,
+        gross_margin_prev=gm_prev,
+        gross_margin_3y=gm3,
+        ebit=ebit,
+        nwc=nwc,
+        nfa=nfa,
+        ev=ev,
+        ocf=ocf,
+        net_income=ni,
+        debt_asset=debt_asset,
+        lt_debt_asset=lt,
+        lt_debt_asset_prev=lt_prev,
+        current_ratio=current,
+        current_ratio_prev=current_prev,
+        shares_issued=shares_issued,
+        asset_turnover=ato,
+        asset_turnover_prev=ato_prev,
+        momentum_12_1=mom,
+        volatility=vol,
+        ncav=ncav,
+        eps_growth=eps_g,
+        rd_to_sales=rd_sales,
+        dist_to_high=dist_to_high(closes),
+    )
+
+
+def attach_percentiles(rows: list[Fundamentals]) -> list[Fundamentals]:
+    """截面 PE/PB 分位。没有估值的保持 None，不拿均值填。"""
+    pes = [(i, r.pe) for i, r in enumerate(rows) if r.pe is not None and r.pe > 0]
+    pbs = [(i, r.pb) for i, r in enumerate(rows) if r.pb is not None and r.pb > 0]
+
+    def _pct(pairs: list[tuple[int, float]]) -> dict[int, float]:
+        if not pairs:
+            return {}
+        ordered = sorted(pairs, key=lambda x: x[1])
+        n = len(ordered)
+        return {idx: rank / max(n - 1, 1) for rank, (idx, _) in enumerate(ordered)}
+
+    pe_p = _pct(pes)
+    pb_p = _pct(pbs)
+    out = []
+    for i, row in enumerate(rows):
+        data = row.model_dump()
+        data["pe_percentile"] = pe_p.get(i)
+        data["pb_percentile"] = pb_p.get(i)
+        out.append(Fundamentals.model_validate(data))
+    return out
+
+
+def missing_ratio(rows: list[Fundamentals], fields: list[str] | None = None) -> float:
+    keys = fields or [
+        "pe",
+        "pb",
+        "mktcap",
+        "amount_avg",
+        "roe",
+        "ocf",
+        "debt_asset",
+        "ebit",
+        "ev",
+        "net_income",
+        "pe_percentile",
+        "pb_percentile",
+    ]
+    if not rows or not keys:
+        return 1.0
+    missing = 0
+    total = 0
+    for row in rows:
+        data = row.model_dump()
+        for k in keys:
+            total += 1
+            if data.get(k) is None or data.get(k) == []:
+                missing += 1
+    return missing / total if total else 1.0

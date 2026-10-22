@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <title>zhiku 每日流水线 {{ daily.asof }}</title>
+  <style>
+    body { font-family: sans-serif; margin: 24px; color: #1b1b1b; }
+    table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+    th, td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
+    th { background: #f4f4f4; }
+    .note { color: #555; }
+    h1, h2 { font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>zhiku 每日流水线 {{ daily.asof }}</h1>
+  <p class="note">研究与提醒工具，不构成投资建议。{% if daily.fictional is not defined or daily.fictional %}示例标的与财务数字均为虚构。{% else %}公开市场数据；不含持仓数量、成本、账户或个人信息。{% endif %}</p>
+  {% if daily.notes %}
+  <ul>{% for n in daily.notes %}<li>{{ n }}</li>{% endfor %}</ul>
+  {% endif %}
+  <h2>宏观锚点</h2>
+  {% set m = daily.macro %}
+  {% if m %}
+  <p>地缘温度 {{ m.geo.temperature if m.geo else "缺数据" }}；利率来源 {{ m.rate_expectation.source if m.rate_expectation else "缺数据" }}</p>
+  <ul>
+    {% for e in m.calendar_7d %}<li>{{ e.name }} {{ e.scheduled_shanghai }} 重要度{{ e.importance }}</li>{% endfor %}
+  </ul>
+  {% else %}
+  <p class="note">缺数据：宏观模块未运行。</p>
+  {% endif %}
+  {% set nws = daily.news %}
+  <h2>大V动态</h2>
+  {% if nws and nws.kol_skipped %}<p class="note">{{ nws.kol_skipped }}</p>{% endif %}
+  {% if nws and nws.kol_resonance %}
+  <ul>{% for r in nws.kol_resonance %}<li>{{ r.hint }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% if nws and nws.kol_feed %}
+  <ul>
+    {% for p in nws.kol_feed %}
+    <li>@{{ p.handle }}（{{ p.category_cn }}）{{ p.headline }}</li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="note">无</p>
+  {% endif %}
+  <h2>今日候选</h2>
+  <table>
+    <tr><th>代码</th><th>名称</th><th>总分</th><th>公式分</th><th>qlib</th><th>来源</th></tr>
+    {% for c in daily.candidates %}
+    <tr>
+      <td>{{ c.symbol }}</td><td>{{ c.name }}</td>
+      <td>{{ "%.1f"|format(c.total) }}</td>
+      <td>{{ "%.1f"|format(c.formula_score) }}</td>
+      <td>{{ c.qlib_score if c.qlib_score is not none else "缺数据" }}</td>
+      <td>{{ c.source }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <h2>回测</h2>
+  {% set pit = daily.pit_universe if daily.pit_universe is defined and daily.pit_universe else {} %}
+  <p class="note">{{ pit.label or "未标时点池" }}。对照行是 T+1 开盘同池等权。覆盖&lt;80% 标数据不足。今日静态名单已作废（前视）。</p>
+  <table>
+    <tr><th>公式</th><th>年化</th><th>最大回撤</th><th>夏普</th><th>对同池超额</th><th>覆盖</th><th>闸门</th></tr>
+    {% for name, bt in daily.backtests.items() %}
+    <tr>
+      <td>{{ name }}</td>
+      <td>{{ bt.annualized }}</td>
+      <td>{{ bt.max_drawdown }}</td>
+      <td>{{ bt.sharpe }}</td>
+      <td>{{ bt.excess_annualized }}</td>
+      <td>{{ bt.coverage_ratio }}</td>
+      <td>{{ bt.gate_status or ("通过" if bt.passed_gate else "未通过") }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <h2>AI 研判</h2>
+  {% set ai = daily.ai_layer if daily.ai_layer is defined and daily.ai_layer else {} %}
+  {% if daily.review_pack %}
+  <p class="note">任务包：{{ daily.review_pack }}</p>
+  {% endif %}
+  {% if ai.regime %}
+  <p>市场状态 {{ ai.regime.style }} / {{ ai.regime.value_or_growth }}；更值得观察 {{ (ai.regime.prefer_screens or []) | join("、") or "缺数据" }}（{{ ai.regime.reason }}；cite={{ ai.regime.cite }}）</p>
+  {% endif %}
+  {% if ai.judgments %}
+  <ul>
+    {% for j in ai.judgments %}
+    <li><strong>{{ j.symbol }}</strong> {{ j.name }} — {{ j.stance }} 置信度 {{ j.confidence }}；失效 {{ j.invalidation }}；时间止损 {{ j.time_stop_days }} 日
+      <ul>
+        {% for c in j.long_case %}<li>多：{{ c.claim }}（{{ c.cite }}）</li>{% endfor %}
+        {% for c in j.short_case %}<li>空：{{ c.claim }}（{{ c.cite }}）</li>{% endfor %}
+      </ul>
+    </li>
+    {% endfor %}
+  </ul>
+  {% elif daily.review_pack %}
+  <p class="note">待外部研判写回（zk ingest-review）。</p>
+  {% else %}
+  <p class="note">无研判。</p>
+  {% endif %}
+  <h2>AI 审核</h2>
+  {% for a in daily.audits %}
+    <h3>{{ a.symbol }} {{ a.name }} — {{ a.conclusion }}</h3>
+    {% if a.skipped %}<p class="note">{{ a.skip_reason }}</p>{% endif %}
+    {% if a.disagreements %}<p>大师分歧：{% for d in a.disagreements %}{{ d.summary }} {% endfor %}</p>{% endif %}
+    <ul>{% for o in a.opinions %}<li>{{ o.master }}：{{ o.stance }} — {{ o.rationale }}</li>{% endfor %}</ul>
+  {% endfor %}
+</body>
+</html>

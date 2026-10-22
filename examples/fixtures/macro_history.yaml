@@ -1,0 +1,166 @@
+# 虚构历史事件研究样本。用于三种情景的平均反应与方向胜率，不是真实回测。
+samples:
+  - event_type: US_CPI
+    scenario: hawkish
+    released: 2024-03-12
+    surprise_z: 1.4
+    winners: [银行, 能源]
+    losers: [成长, 白酒]
+    reactions:
+      US2Y: {t0: 0.09, t1: 0.06, t5: 0.03}
+      US10Y: {t0: 0.07, t1: 0.04, t5: 0.01}
+      DXY: {t0: 0.005, t1: 0.003, t5: 0.001}
+      GOLD: {t0: -0.014, t1: -0.01, t5: -0.004}
+      NQ: {t0: -0.018, t1: -0.012, t5: -0.005}
+      CSI300: {t0: -0.01, t1: -0.008, t5: -0.003}
+      HSTECH: {t0: -0.02, t1: -0.014, t5: -0.006}
+      VIX: {t0: 0.09, t1: 0.05, t5: 0.01}
+
+  - event_type: US_CPI
+    scenario: hawkish
+    released: 2025-01-15
+    surprise_z: 0.9
+    winners: [银行]
+    losers: [成长, 白酒]
+    reactions:
+      US2Y: {t0: 0.06, t1: 0.04, t5: 0.01}
+      US10Y: {t0: 0.05, t1: 0.03, t5: 0.01}
+      DXY: {t0: 0.003, t1: 0.002, t5: 0.0}
+      GOLD: {t0: -0.01, t1: -0.006, t5: -0.002}
+      NQ: {t0: -0.012, t1: -0.008, t5: -0.003}
+      CSI300: {t0: -0.008, t1: -0.005, t5: -0.001}
+      HSTECH: {t0: -0.015, t1: -0.01, t5: -0.004}
+      VIX: {t0: 0.06, t1: 0.03, t5: 0.0}
+
+  - event_type: US_CPI
+    scenario: inline
+    released: 2024-08-14
+    surprise_z: 0.1
+    winners: []
+    losers: []
+    reactions:
+      US10Y: {t0: 0.01, t1: 0.0, t5: -0.01}
+      GOLD: {t0: 0.002, t1: 0.001, t5: 0.0}
+      NQ: {t0: 0.003, t1: 0.002, t5: 0.001}
+      CSI300: {t0: 0.001, t1: 0.0, t5: 0.0}
+
+  - event_type: US_CPI
+    scenario: dovish
+    released: 2024-11-13
+    surprise_z: -1.1
+    winners: [成长, 白酒, 黄金]
+    losers: [银行]
+    reactions:
+      US2Y: {t0: -0.07, t1: -0.05, t5: -0.02}
+      US10Y: {t0: -0.05, t1: -0.03, t5: -0.01}
+      DXY: {t0: -0.004, t1: -0.002, t5: 0.0}
+      GOLD: {t0: 0.012, t1: 0.008, t5: 0.003}
+      NQ: {t0: 0.016, t1: 0.01, t5: 0.004}
+      CSI300: {t0: 0.008, t1: 0.005, t5: 0.002}
+      HSTECH: {t0: 0.018, t1: 0.012, t5: 0.005}
+      VIX: {t0: -0.07, t1: -0.04, t5: -0.01}
+
+  - event_type: FOMC
+    scenario: hawkish
+    released: 2024-09-18
+    winners: [美元, 银行]
+    losers: [成长, 黄金]
+    reactions:
+      US2Y: {t0: 0.1, t1: 0.06, t5: 0.02}
+      US10Y: {t0: 0.06, t1: 0.03, t5: 0.0}
+      DXY: {t0: 0.006, t1: 0.004, t5: 0.001}
+      GOLD: {t0: -0.016, t1: -0.01, t5: -0.003}
+      NQ: {t0: -0.02, t1: -0.012, t5: -0.004}
+      CSI300: {t0: -0.012, t1: -0.008, t5: -0.002}
+      VIX: {t0: 0.1, t1: 0.05, t5: 0.01}
+
+  - event_type: FOMC
+    scenario: dovish
+    released: 2024-12-18
+    winners: [成长, 黄金]
+    losers: [美元]
+    reactions:
+      US2Y: {t0: -0.08, t1: -0.05, t5: -0.02}
+      GOLD: {t0: 0.014, t1: 0.009, t5: 0.003}
+      NQ: {t0: 0.018, t1: 0.01, t5: 0.004}
+      CSI300: {t0: 0.007, t1: 0.004, t5: 0.001}
+
+  - event_type: FOMC
+    scenario: inline
+    released: 2025-03-19
+    reactions:
+      US10Y: {t0: 0.01, t1: 0.0, t5: 0.0}
+      NQ: {t0: 0.002, t1: 0.001, t5: 0.0}
+
+  - event_type: US_RETAIL
+    scenario: dovish
+    released: 2025-06-17
+    winners: [成长, 黄金]
+    losers: [美元]
+    reactions:
+      US10Y: {t0: -0.03, t1: -0.02, t5: -0.01}
+      GOLD: {t0: 0.005, t1: 0.003, t5: 0.001}
+      NQ: {t0: 0.007, t1: 0.004, t5: 0.001}
+      CSI300: {t0: 0.003, t1: 0.002, t5: 0.0}
+      VIX: {t0: -0.02, t1: -0.01, t5: 0.0}
+
+  - event_type: US_RETAIL
+    scenario: hawkish
+    released: 2025-02-14
+    winners: [银行]
+    losers: [成长]
+    reactions:
+      US10Y: {t0: 0.04, t1: 0.02, t5: 0.01}
+      NQ: {t0: -0.006, t1: -0.003, t5: 0.0}
+
+  - event_type: US_PCE
+    scenario: hawkish
+    released: 2025-04-25
+    winners: [银行]
+    losers: [成长]
+    reactions:
+      US10Y: {t0: 0.05, t1: 0.03, t5: 0.01}
+      GOLD: {t0: -0.008, t1: -0.004, t5: 0.0}
+      NQ: {t0: -0.01, t1: -0.006, t5: -0.002}
+
+  - event_type: US_PCE
+    scenario: dovish
+    released: 2025-07-31
+    winners: [成长, 黄金]
+    losers: [银行]
+    reactions:
+      US10Y: {t0: -0.04, t1: -0.02, t5: 0.0}
+      GOLD: {t0: 0.007, t1: 0.004, t5: 0.001}
+      NQ: {t0: 0.009, t1: 0.005, t5: 0.002}
+
+  - event_type: CN_LPR
+    scenario: dovish
+    released: 2025-05-20
+    winners: [地产, 银行]
+    losers: []
+    reactions:
+      CSI300: {t0: 0.01, t1: 0.006, t5: 0.002}
+      HSTECH: {t0: 0.012, t1: 0.007, t5: 0.002}
+
+  - event_type: CN_LPR
+    scenario: inline
+    released: 2025-08-20
+    reactions:
+      CSI300: {t0: 0.001, t1: 0.0, t5: 0.0}
+
+  - event_type: OPEC
+    scenario: hawkish
+    released: 2025-06-01
+    winners: [能源]
+    losers: [航空]
+    reactions:
+      WTI: {t0: 0.03, t1: 0.02, t5: 0.01}
+      BRENT: {t0: 0.028, t1: 0.018, t5: 0.008}
+      CSI300: {t0: 0.004, t1: 0.002, t5: 0.0}
+
+  - event_type: ECB
+    scenario: hawkish
+    released: 2025-03-06
+    reactions:
+      DXY: {t0: -0.002, t1: 0.0, t5: 0.0}
+      GOLD: {t0: -0.004, t1: -0.002, t5: 0.0}

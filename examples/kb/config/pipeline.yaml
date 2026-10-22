@@ -1,0 +1,15 @@
+# 覆盖默认流水线阈值。留空项继承包内 default.yaml。
+# 本文件是虚构研究示例，不是任何人的实盘参数。
+backtest:
+  min_sharpe: 0.0
+  require_beat_benchmark: false
+  top_n: 3
+ai:
+  top_n: 5
+merge:
+  formula: 0.7
+  qlib: 0.3
+macro:
+  freeze_adds_in_window: false
+news:
+  enabled: true

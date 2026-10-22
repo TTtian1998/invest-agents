@@ -1,0 +1,24 @@
+## 大V动态
+{% if news.kol_skipped %}
+- {{ news.kol_skipped }}
+{% endif %}
+{% if news.kol_resonance %}
+### 共振与反向风险
+{% for r in news.kol_resonance %}
+- {{ r.hint }}
+  - 账号：{{ r.handles | join("、") }}
+{% endfor %}
+{% endif %}
+{% if news.kol_feed %}
+{% for p in news.kol_feed %}
+- **@{{ p.handle }}**（{{ p.category_cn }}）{% if p.tickers %}［{{ p.tickers | join(", ") }}］{% endif %} {{ p.direction }}
+  - {{ p.headline }}
+  - 标签：{{ p.tags | join("、") }}{% if p.newswire_matched %}；快讯已匹配一/二级{% endif %}{% if p.resonance %}；共振{% endif %}{% if p.reverse_risk %}；反向风险{% endif %}{% if p.fomc_boost %}；FOMC 窗口加权{% endif %}
+{% if p.institution_review %}
+  - 已知持仓：{{ p.institution_review.known_holdings }}
+  - 利益关系：{{ p.institution_review.conflicts }}
+{% endif %}
+{% endfor %}
+{% else %}
+无
+{% endif %}

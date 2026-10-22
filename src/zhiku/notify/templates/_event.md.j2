@@ -1,0 +1,24 @@
+{% if news.crowding_stats %}
+## 拥挤度分组事件研究
+{% for k, v in news.crowding_stats.items() %}
+- {{ k }}：样本 {{ v.n }}；T+1 胜率 {{ v.winrate_t1 if v.winrate_t1 is not none else "缺数据" }}；T+5 胜率 {{ v.winrate_t5 if v.winrate_t5 is not none else "缺数据" }}
+{% endfor %}
+{% endif %}
+
+{% if news.emergency and news.emergency.active %}
+## 应急模式
+{% for r in news.emergency.reasons %}
+- {{ r }}
+{% endfor %}
+{% for p in news.emergency.playbook %}
+- {{ p }}
+{% endfor %}
+{% if news.emergency.affected %}
+- 受影响持仓代码：{{ news.emergency.affected | join("、") }}（不展示数量/成本）
+{% endif %}
+{% if news.emergency.hedges %}
+{% for h in news.emergency.hedges %}
+- {{ h }}
+{% endfor %}
+{% endif %}
+{% endif %}

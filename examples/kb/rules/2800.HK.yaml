@@ -1,0 +1,15 @@
+# 虚构示例：港股 ETF。价位、数量、成本均为编造。
+symbol: "2800.HK"
+market: HK
+name: 示例港股ETF
+growth: false
+add_blocked: false
+position: {qty: 2000, cost: 20.00}
+rules:
+  - id: hk2800-2d
+    when: {field: close, op: lt, level: 18.00, consecutive: 2}
+    action: {type: sell_all}
+  - id: hk2800-1d
+    when: {field: close, op: lt, level: 17.00}
+    action: {type: sell_all}
+    supersedes: [hk2800-2d]

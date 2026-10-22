@@ -1,0 +1,15 @@
+# 虚构示例：宽基 ETF。价位、数量、成本均为编造。
+symbol: "510300"
+market: CN
+name: 示例宽基ETF
+growth: false
+add_blocked: true
+position: {qty: 10000, cost: 4.00}
+rules:
+  - id: demo-380-2d
+    when: {field: close, op: lt, level: 3.80, consecutive: 2}
+    action: {type: sell_fraction, fraction: 0.5}
+  - id: demo-370-1d
+    when: {field: close, op: lt, level: 3.70}
+    action: {type: sell_fraction, fraction: 0.5}
+    supersedes: [demo-380-2d]

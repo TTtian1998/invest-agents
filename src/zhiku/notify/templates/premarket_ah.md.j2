@@ -1,0 +1,81 @@
+# A/H 盘前舆情分析 {{ news.asof }}
+
+研究与提醒工具，不构成投资建议，不自动下单。报告以**分析**为主体，原文链接在文末。示例标的与数字均为虚构。
+
+{% if news.notes %}
+## 运行备注
+{% for n in news.notes %}
+- {{ n }}
+{% endfor %}
+{% endif %}
+
+{% if news.window_banners %}
+## 事件窗口
+{% for w in news.window_banners %}
+- {{ w }}
+{% endfor %}
+{% endif %}
+
+## 入选分析
+{% if news.analyses %}
+{% with cards = news.analyses %}
+{% include "_analysis.md.j2" %}
+{% endwith %}
+{% else %}
+无
+{% endif %}
+
+{% include "_event.md.j2" %}
+
+{% include "_kol.md.j2" %}
+
+低价值新闻未展开：{{ news.low_value_count }} 条（情绪热度/旧闻翻炒/未交叉验证等只计数）。
+知情人士后续跟踪：确认 {{ news.source_hits.confirmed if news.source_hits else 0 }} / 否认 {{ news.source_hits.denied if news.source_hits else 0 }} / 待定 {{ news.source_hits.pending if news.source_hits else 0 }}。
+
+## 多空机会
+### 质量档
+{% for o in news.by_tier.get("质量档", []) %}
+- **{{ o.symbol }}** {{ o.name }} {{ o.direction }} 分 {{ o.score }}｜{{ o.source_grade_label or "信源未分级" }}
+  - 逻辑：{{ o.entry_logic }}
+  - 风险：{{ o.risk }}
+  - 失效：{{ o.invalidation or "缺数据" }}；时间止损 {{ o.time_stop_on or o.time_stop or "缺数据" }}
+  - 预期差 z={{ o.surprise_z if o.surprise_z is not none else "缺数据" }}；新颖度 {{ o.novelty if o.novelty is not none else "缺数据" }}；拥挤度 {{ o.crowding if o.crowding is not none else "缺数据" }}
+{% endfor %}
+{% if not news.by_tier.get("质量档") %}
+无
+{% endif %}
+
+### 交易档
+{% for o in news.by_tier.get("交易档", []) %}
+- **{{ o.symbol }}** {{ o.name }} {{ o.direction }} 分 {{ o.score }}；止损 {{ o.stop if o.stop is not none else "缺数据" }}
+  - 逻辑：{{ o.entry_logic }}
+  - 失效：{{ o.invalidation or "缺数据" }}；时间止损 {{ o.time_stop_on or o.time_stop or "缺数据" }}
+  - 预期差 z={{ o.surprise_z if o.surprise_z is not none else "缺数据" }}；新颖度 {{ o.novelty if o.novelty is not none else "缺数据" }}{% if o.stale %}；已过时{% endif %}
+{% endfor %}
+{% if not news.by_tier.get("交易档") %}
+无
+{% endif %}
+
+### 只观察
+{% for o in news.by_tier.get("只观察", []) %}
+- **{{ o.symbol }}** {{ o.name }} {{ o.direction }} — {{ o.risk }}
+{% endfor %}
+{% if not news.by_tier.get("只观察") %}
+无
+{% endif %}
+
+## 附录：信源分级一览
+{% for c in news.clusters %}
+- {{ c.source_grade_label or "未分级" }}{% if c.exclusive %}（独家/快讯加权）{% endif %}{% if c.unofficial %}［未经官方证实／{{ c.official_followup or "pending" }}］{% endif %}：{{ c.headline }}{% if c.official_url %}；官方原文 {{ c.official_url }}{% endif %}
+{% endfor %}
+
+## 附录：原文链接
+{% for l in news.links %}
+- {{ l.source }}：[{{ l.headline }}]({{ l.url }}) {% if not l.url %}（无链接）{% endif %}
+{% endfor %}
+{% if not news.links %}
+无
+{% endif %}
+
+---
+{{ disclaimer }}

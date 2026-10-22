@@ -1,0 +1,73 @@
+# 每周命中率 {{ review.start }} — {{ review.end }}
+
+- 时区：Asia/Shanghai
+- 数据源：`{{ provider }}`
+- 知识库：`{{ kb }}`
+- 窗口：周一到周五；T+1 / T+3 取对应市场交易日收盘
+
+## 分组命中率（按 T+1）
+
+{% for g in review.groups %}
+- 市场 {{ g.market }} / 规则类型 `{{ g.rule_type }}`
+  - 样本 {{ g.total }}；兑现 {{ g.hit }}；误报 {{ g.false_alarm }}；中性 {{ g.neutral }}；待定 {{ g.pending }}
+  - 命中率：{{ "%.1f%%"|format(g.hit_rate * 100) if g.hit_rate is not none else "缺数据" }}
+{% endfor %}
+{% if not review.groups %}
+本周无触发事件。
+{% endif %}
+
+## 事件明细
+
+{% for rec in review.records %}
+- `{{ rec.event.date }}` {{ rec.event.symbol }} 规则 `{{ rec.event.rule_id }}`
+  - 触发价 {{ rec.event.trigger_price }} / 有效线 {{ rec.event.effective_level }} / 动作 `{{ rec.event.action.type }}`
+  {% for o in rec.outcomes %}
+  - T+{{ o.horizon }}（{{ o.on if o.on else "缺数据" }}）：{{ o.label_cn }}{% if o.close is not none %}，收盘 {{ o.close }}{% endif %}{% if o.missing %}，{{ o.missing }}{% endif %}
+  {% endfor %}
+{% endfor %}
+
+## 事件剧本兑现
+{% if script_hits %}
+{% for h in script_hits %}
+- {{ h.name }} 情景 {{ h.scenario or "缺数据" }}：方向吻合 {{ h.matched }}/{{ h.total }}{% if h.hit is sameas true %}（兑现）{% elif h.hit is sameas false %}（未兑现）{% else %}（{{ h.missing or "待定" }}）{% endif %}
+{% endfor %}
+{% else %}
+本周无已落地宏观剧本样本。
+{% endif %}
+
+## 拥挤度分组事件研究
+{% if crowding_stats %}
+{% for k, v in crowding_stats.items() %}
+- {{ k }}：样本 {{ v.n }}；T+1 胜率 {{ v.winrate_t1 if v.winrate_t1 is not none else "缺数据" }}；T+5 胜率 {{ v.winrate_t5 if v.winrate_t5 is not none else "缺数据" }}
+{% endfor %}
+{% else %}
+缺数据。
+{% endif %}
+
+## 大V命中率
+{% if x_hits is defined and x_hits and x_hits.accounts %}
+- 合计：兑现 {{ x_hits.hit }}；落空 {{ x_hits.miss }}；待定 {{ x_hits.pending }}；命中率 {{ "%.0f%%"|format(x_hits.hit_rate * 100) if x_hits.hit_rate is not none else "缺数据" }}
+{% for a in x_hits.accounts %}
+- @{{ a.handle }}{% if a.category %}（{{ a.category }}）{% endif %}：命中 {{ a.hit }} / 落空 {{ a.miss }} / 待定 {{ a.pending }}；命中率 {{ "%.0f%%"|format(a.hit_rate * 100) if a.hit_rate is not none else "缺数据" }}
+{% endfor %}
+{% else %}
+缺数据：本周无大V关键判断样本。
+{% endif %}
+
+## 信源跟踪命中率
+{% if source_hits %}
+- 知情人士后续：确认 {{ source_hits.confirmed }}；否认 {{ source_hits.denied }}；待定 {{ source_hits.pending }}；命中率 {{ "%.0f%%"|format(source_hits.hit_rate * 100) if source_hits.hit_rate is not none else "缺数据" }}
+{% else %}
+缺数据。
+{% endif %}
+
+## 候选教训
+
+以下文本按规则生成，**不会自动写入**任何 CIO_LESSONS 文件，仅供人工取用。
+
+{% for lesson in review.lessons %}
+- {{ lesson }}
+{% endfor %}
+
+---
+研究与提醒工具，不构成投资建议，不自动下单。
