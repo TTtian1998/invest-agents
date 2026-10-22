@@ -73,6 +73,8 @@ SINA_FIELDS: dict[str, tuple[str, ...]] = {
     "实收资本(或股本)": ("实收资本(或股本)", "股本", "实收资本"),
     "存货": ("存货",),
     "应收账款": ("应收账款",),
+    "每股收益": ("每股收益", "基本每股收益", "epsTTM"),
+    "每股净资产": ("每股净资产", "BPS"),
 }
 
 
@@ -149,3 +151,173 @@ def merge_payload(base: dict[str, Any] | None, overlay: dict[str, Any] | None) -
             continue
         out[key] = val
     return out
+
+
+def _cell_dict(row: dict[str, Any], *names: str) -> Any:
+    lower = {str(k).lower(): v for k, v in row.items()}
+    for name in names:
+        if name in row:
+            return row[name]
+        if name.lower() in lower:
+            return lower[name.lower()]
+    return None
+
+
+def map_baostock_statement(symbol: str, kind: str, row: dict[str, Any]) -> dict[str, Any] | None:
+    """baostock 季报 → store 行。只用 pubDate 作公告日；没有则用 statDate 并标 announced_is_period。"""
+    period = _as_date(_cell_dict(row, "statDate", "stat_date"))
+    announced = _as_date(_cell_dict(row, "pubDate", "pub_date"))
+    announced_is_period = False
+    if announced is None and period is not None:
+        announced = period
+        announced_is_period = True
+    if announced is None:
+        return None
+    payload: dict[str, Any] = {}
+    if kind == "income":
+        mapping = {
+            "净利润": ("netProfit", "净利润"),
+            "营业总收入": ("MBRevenue", "主营营业收入", "营业收入"),
+            "每股收益": ("epsTTM", "eps", "每股收益"),
+            "净资产收益率": ("roeAvg", "ROE"),
+            "毛利率": ("gpMargin", "销售毛利率"),
+            "销售净利率": ("npMargin",),
+            "总股本": ("totalShare", "总股本"),
+            "流通股本": ("liqaShare",),
+        }
+    elif kind == "balance":
+        mapping = {
+            "资产负债率": ("liabilityToAsset", "资产负债率"),
+            "流动比率": ("currentRatio",),
+            "速动比率": ("quickRatio",),
+            "权益乘数": ("assetToEquity",),
+        }
+    else:
+        mapping = {
+            "经营现金流比净利润": ("CFOToNP",),
+            "经营现金流比营收": ("CFOToOR",),
+        }
+    for dest, aliases in mapping.items():
+        val = _num(_cell_dict(row, dest, *aliases))
+        if val is not None:
+            payload[dest] = val
+    if not payload:
+        return None
+    return {
+        "symbol": normalize_cn(symbol),
+        "kind": kind,
+        "period": period or announced,
+        "announced": announced,
+        "announced_is_period": announced_is_period,
+        "payload": payload,
+        "source": "baostock",
+    }
+
+
+def map_baostock_forecast(symbol: str, row: dict[str, Any]) -> dict[str, Any] | None:
+    """业绩预告。公告日用 profitForcastExpPubDate；修正幅度取上下限中点。"""
+    period = _as_date(
+        _cell_dict(row, "profitForcastExpStatDate", "statDate", "stat_date")
+    )
+    announced = _as_date(
+        _cell_dict(row, "profitForcastExpPubDate", "pubDate", "pub_date")
+    )
+    announced_is_period = False
+    if announced is None and period is not None:
+        announced = period
+        announced_is_period = True
+    if announced is None:
+        return None
+    up = _num(_cell_dict(row, "profitForcastChgPctUp", "incrementExp", "increment"))
+    down = _num(_cell_dict(row, "profitForcastChgPctDwn"))
+    increment = None
+    if up is not None and down is not None:
+        increment = (up + down) / 2.0
+    elif up is not None:
+        increment = up
+    elif down is not None:
+        increment = down
+    if increment is not None and abs(increment) > 2:
+        increment = increment / 100.0
+    payload = {
+        "profit_forecast": _num(_cell_dict(row, "profitForcastExp", "profitForecastExp", "profitForcast")),
+        "profit_last": _num(_cell_dict(row, "profitForcastLastYear", "profitForecastLastYear")),
+        "increment": increment,
+        "increment_last": _num(_cell_dict(row, "incrementLastYear")),
+        "forecast_type": _cell_dict(row, "profitForcastType", "type"),
+        "forecast_range": _cell_dict(row, "profitForcastAbstract", "range"),
+        "chg_pct_up": up,
+        "chg_pct_down": down,
+    }
+    if all(payload.get(k) is None for k in ("profit_forecast", "profit_last", "increment")):
+        return None
+    return {
+        "symbol": normalize_cn(symbol),
+        "kind": "forecast",
+        "period": period or announced,
+        "announced": announced,
+        "announced_is_period": announced_is_period,
+        "payload": payload,
+        "source": "baostock",
+    }
+
+
+def map_baostock_dividend(symbol: str, row: dict[str, Any]) -> dict[str, Any] | None:
+    ex = _as_date(
+        _cell_dict(row, "dividOperateDate", "dividRegistDate", "除权除息日", "ex_date")
+    )
+    announced = _as_date(
+        _cell_dict(
+            row,
+            "dividPlanAnnounceDate",
+            "dividPreNoticeDate",
+            "dividAgmPdate",
+            "公告日期",
+            "announced",
+        )
+    )
+    if ex is None and announced is None:
+        return None
+    amt = _num(
+        _cell_dict(
+            row,
+            "dividCashPsBeforeTax",
+            "dividCashPsAfterTax",
+            "payout",
+            "payouts",
+            "派息",
+        )
+    )
+    return {
+        "symbol": normalize_cn(symbol),
+        "ex_date": ex or announced,
+        "announced": announced or ex,
+        "amount": amt,
+        "source": "baostock",
+    }
+
+
+def map_ak_dividend_history(symbol: str, df: Any) -> list[dict[str, Any]] | MissingData:
+    """akshare 历史分红（stock_history_dividend_detail / fhps 明细）。"""
+    if df is None or getattr(df, "empty", True):
+        return MissingData("历史分红为空", symbol=symbol)
+    rows: list[dict[str, Any]] = []
+    for _, raw in df.iterrows():
+        ex = _as_date(_cell(raw, "除权除息日", "除息日", "ex_date", "实施日期"))
+        announced = _as_date(_cell(raw, "公告日期", "预案公告日", "最新公告日期", "announced"))
+        if ex is None and announced is None:
+            continue
+        amt = _num(_cell(raw, "派息", "现金分红", "分红", "每股派息", "现金分红-现金分红比例", "amount"))
+        yld = _num(_cell(raw, "股息率", "现金分红-股息率", "yield"))
+        rows.append(
+            {
+                "symbol": normalize_cn(symbol),
+                "ex_date": ex or announced,
+                "announced": announced or ex,
+                "amount": amt,
+                "yield": yld,
+                "source": "akshare",
+            }
+        )
+    return rows or MissingData("历史分红无有效行", symbol=symbol)
+

@@ -480,6 +480,7 @@ def run_daily_cmd(
             retries=settings.data.retries,
             workers=4,
             detail_financials=settings.data.detail_financials,
+            hist_financials=False,
             progress=lambda m: typer.echo(m, err=True),
         )
         timings["sync"] = time.monotonic() - t0
@@ -621,6 +622,75 @@ def factor_research(
     )
 
 
+@factor_app.command("research-round2")
+def factor_research_round2(
+    ctx: typer.Context,
+    out_dir: Optional[Path] = typer.Option(None, "--out", help="实验日志目录，默认 artifacts/round2"),
+    asof_text: Optional[str] = typer.Option(None, "--asof"),
+) -> None:
+    """第二轮单变量：相对锁定 z-score；测试集只看一次。产出不进 git。"""
+    from zhiku.data.store import MarketStore
+    from zhiku.factors.experiment import run_round2
+
+    paths: Paths = ctx.obj["paths"]
+    store = MarketStore(paths.data_dir)
+    dest = out_dir or Path("/opt/cursor/artifacts/zhiku-quant-round2")
+    asof = _parse_date(asof_text)
+    payload = run_round2(store, asof=asof, out_dir=dest, models_dir=paths.models_dir)
+    kept = payload["payload"].get("kept") or []
+    typer.echo(
+        f"第二轮完成 {payload['payload'].get('n_experiments')} 个实验；"
+        f"测试集查看次数={payload['payload'].get('test_looks')}；"
+        f"保留={kept}；锁={payload['payload'].get('locked')}；日志={dest}"
+    )
+
+
+@factor_app.command("research-round3")
+def factor_research_round3(
+    ctx: typer.Context,
+    out_dir: Optional[Path] = typer.Option(None, "--out", help="实验日志目录，默认 artifacts/round3"),
+    asof_text: Optional[str] = typer.Option(None, "--asof"),
+) -> None:
+    """第三轮：T+20 行业中性超额 + walk-forward 多折。测试集只看一次。产出不进 git。"""
+    from zhiku.data.store import MarketStore
+    from zhiku.factors.experiment import run_round3
+
+    paths: Paths = ctx.obj["paths"]
+    store = MarketStore(paths.data_dir)
+    dest = out_dir or Path("/opt/cursor/artifacts/zhiku-quant-round3")
+    asof = _parse_date(asof_text)
+    payload = run_round3(store, asof=asof, out_dir=dest, models_dir=paths.models_dir)
+    kept = payload["payload"].get("kept") or []
+    typer.echo(
+        f"第三轮完成 {payload['payload'].get('n_experiments')} 个实验；"
+        f"测试集查看次数={payload['payload'].get('test_looks')}；"
+        f"保留={kept}；锁={payload['payload'].get('locked')}；日志={dest}"
+    )
+
+
+@factor_app.command("style-attrib")
+def factor_style_attrib(
+    ctx: typer.Context,
+    out_dir: Optional[Path] = typer.Option(None, "--out", help="归因目录，默认 artifacts/style-attrib"),
+    asof_text: Optional[str] = typer.Option(None, "--asof"),
+) -> None:
+    """dividend/graham 分年+行业超额，必要时试 EW 12-1 开关。测试集只看一次。"""
+    from zhiku.data.store import MarketStore
+    from zhiku.backtest.style_attrib import run_style_attribution
+    from zhiku.pipeline.settings import load_pipeline_settings
+
+    paths: Paths = ctx.obj["paths"]
+    store = MarketStore(paths.data_dir)
+    dest = out_dir or Path("/opt/cursor/artifacts/zhiku-style-attrib")
+    asof = _parse_date(asof_text)
+    settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
+    payload = run_style_attribution(store, settings, asof=asof, out_dir=dest)
+    typer.echo(
+        f"风格归因完成；轮动={payload.get('rotation')}；"
+        f"开关测试查看={(payload.get('regime') or {}).get('test_looks')}；日志={dest}"
+    )
+
+
 @factor_app.command("predict")
 def factor_predict(ctx: typer.Context) -> None:
     """输出 qlib 分数；未训练则空结果并提示。"""
@@ -684,6 +754,90 @@ def macro_cmd(
         typer.echo(f"已写入 {path}", err=True)
 
 
+@app.command("export-review")
+def export_review_cmd(
+    ctx: typer.Context,
+    date_text: Optional[str] = typer.Option(None, "--date"),
+) -> None:
+    """导出外部研判任务包（候选、截面、新闻摘录、大师清单）。"""
+    from zhiku.ai.pack import build_review_pack, write_review_pack
+    from zhiku.pipeline.daily import run_daily
+    from zhiku.pipeline.settings import load_pipeline_settings
+
+    paths: Paths = ctx.obj["paths"]
+    paths.ensure_runtime_dirs()
+    on = _parse_date(date_text)
+    settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
+    daily = run_daily(paths, on, provider_kind=ctx.obj["provider_kind"])
+    from zhiku.pipeline.universe import load_pipeline_universe
+
+    rows, _, _ = load_pipeline_universe(paths, on, provider_kind=ctx.obj["provider_kind"], settings=settings)
+    pack = build_review_pack(
+        asof=on,
+        candidates=daily.candidates,
+        rows=rows,
+        masters=settings.ai.masters,
+        news=daily.news,
+        macro=daily.macro,
+        judge_n=settings.ai.judge_n,
+    )
+    dest = paths.reports / f"{on.isoformat()}-review-pack.json"
+    write_review_pack(dest, pack)
+    typer.echo(str(dest))
+
+
+@app.command("ingest-review")
+def ingest_review_cmd(
+    ctx: typer.Context,
+    path: Path = typer.Argument(..., exists=True, readable=True, help="zhiku.review_result.v1 JSON"),
+) -> None:
+    """把外部研判结果写入决策日志。"""
+    from zhiku.ai.journal import DecisionJournal
+    from zhiku.ai.pack import load_review_result
+
+    paths: Paths = ctx.obj["paths"]
+    paths.ensure_runtime_dirs()
+    result = load_review_result(path)
+    n = DecisionJournal(paths.journal / "ai_decisions.jsonl").append_result(
+        result, available={"source": str(path)}
+    )
+    typer.echo(f"写入 {n} 条决策日志（asof={result.asof} backend={result.backend}）")
+
+
+@app.command("review-scorecard")
+def review_scorecard_cmd(
+    ctx: typer.Context,
+    formula_top_n: int = typer.Option(10, "--formula-top"),
+) -> None:
+    """AI 研究跟进/回避 在 T+5、T+20 对同池等权的超额，对照公式排名。"""
+    from zhiku.ai.journal import DecisionJournal
+    from zhiku.ai.scorecard import build_scorecard
+    from zhiku.backtest.engine import load_price_panel, load_price_panel_from_store
+
+    paths: Paths = ctx.obj["paths"]
+    journal = DecisionJournal(paths.journal / "ai_decisions.jsonl")
+    prices = None
+    if ctx.obj["provider_kind"] == "live":
+        from zhiku.data.store import MarketStore
+
+        store = MarketStore(paths.data_dir)
+        prices = load_price_panel_from_store(store)
+    else:
+        csv = paths.fixtures / "monthly_prices.csv"
+        if csv.is_file():
+            prices = load_price_panel(csv)
+    if prices is None or prices.empty:
+        _die("缺价格面板，无法做 scorecard")
+    card = build_scorecard(journal, prices, formula_top_n=formula_top_n)
+    typer.echo(f"日志截止 {card.asof_max or '空'}")
+    for note in card.notes:
+        typer.echo(note, err=True)
+    for gname, hz in card.groups.items():
+        for h, stat in hz.items():
+            ex = "待定" if stat.excess is None else f"{stat.excess:.2%}"
+            typer.echo(f"{gname} T+{h} 超额={ex} n={stat.n} 待定={stat.pending}")
+
+
 @app.command("debate")
 def debate_cmd(symbol: str) -> None:
     """可选 TradingAgents 辩论。未安装时友好提示并以非零码退出。"""
@@ -711,6 +865,7 @@ def data_sync(
     include_global: Optional[bool] = typer.Option(None, "--include-global/--skip-global"),
     workers: int = typer.Option(4, "--workers", help="日线并行数（baostock 子进程）"),
     incremental: bool = typer.Option(False, "--incremental/--full", help="只拉 last_ok 前几天"),
+    hist_fin: Optional[bool] = typer.Option(None, "--hist-fin/--skip-hist-fin", help="补历史季报/分红/预告"),
 ) -> None:
     """增量同步 A 股列表/成分/日线/财报到 ZHIKU_KB/data。可断点续传。"""
     from zhiku.data.store import MarketStore
@@ -740,6 +895,7 @@ def data_sync(
         incremental=incremental,
         lookback_days=ds.incremental_lookback_days,
         detail_financials=ds.detail_financials,
+        hist_financials=hist_fin if hist_fin is not None else ds.hist_financials,
         progress=lambda m: typer.echo(m, err=True),
     )
     typer.echo(report.summary())

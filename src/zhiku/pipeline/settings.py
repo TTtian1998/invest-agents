@@ -84,9 +84,13 @@ class SizingSettings(BaseModel):
 
 
 class MergeSettings(BaseModel):
-    formula: float = 0.6
-    qlib: float = 0.4
+    formula: float = 0.90
+    qlib: float = 0.10
+    qlib_floor: float = 0.10
+    qlib_cap: float = 0.40
+    rank_ic_threshold: float = 0.03
     icir_threshold: float = 0.20
+    formula_first: bool = True
 
 
 class BacktestSettings(BaseModel):
@@ -106,10 +110,13 @@ class BacktestSettings(BaseModel):
     require_half_excess: bool = True
     fill: str = "next_open"
     n_trials: int = 9
+    min_coverage: float = 0.80
 
 
 class AISettings(BaseModel):
     top_n: int = 15
+    judge_n: int = 10
+    backend: str = "auto"
     masters: list[str] = Field(
         default_factory=lambda: [
             "buffett",
@@ -296,6 +303,7 @@ class DataSettings(BaseModel):
     slippage_bps: float = 5.0
     incremental_lookback_days: int = 2
     detail_financials: bool = True
+    hist_financials: bool = True
 
 
 class EventSettings(BaseModel):

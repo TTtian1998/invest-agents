@@ -87,8 +87,8 @@ def _canslim_flags(row: Fundamentals) -> dict[str, int | None]:
     n = None if row.listed_years is None else int(row.listed_years >= 1)
     s = None if row.shares_issued is None else int(not row.shares_issued)
     leader = int(bool(row.industry_leader) or (row.momentum_12_1 is not None and row.momentum_12_1 > 0))
-    l = leader if row.momentum_12_1 is not None or row.industry_leader else None
-    return {"C": c, "A": a, "N": n, "S": s, "L": l, "I": None, "M": None}
+    leader_flag = leader if row.momentum_12_1 is not None or row.industry_leader else None
+    return {"C": c, "A": a, "N": n, "S": s, "L": leader_flag, "I": None, "M": None}
 
 
 def screen_canslim(rows: list[Fundamentals], settings: ClassicScreenSettings) -> list[ScreenRow]:

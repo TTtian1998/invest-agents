@@ -83,6 +83,15 @@ qlib 仓库里还有 HIST、MASTER 的 example 目录：
 
 明确不做（本轮）：TRA / HIST / MASTER、完整 Alpha101、CNE5 优化器、5–8 年训练（本地日线从 2023-10 起，做不到）。
 
+## 第二轮（相对锁定 z-score，每次只改一个变量）
+
+第一轮验证集锁定截面 z-score（RankIC +0.027，RankICIR 0.157）。本轮不重看第一轮测试集；新目录、测试集只看一次。
+
+9. 相对 z-score 做行业均值 + 对数规模残差中性化（Barra 简版；第一轮是 LGB 上的 `neut_ind_size`，本轮只改 z-score 特征）。
+10. 分析师/业绩预告修正：Gleason & Lee (2003) 和 Jegadeesh, Kim, Krische & Lee (2004) 表明预期修正有横截面信息。A 股没有稳定的 IBES 一致预期面板；用 baostock `query_forecast_report` 的公告日预告作 PIT 代理，缺预告记缺数据，不拿今日快照回填。
+
+锁只在验证集明确超过 z-score 时改写。
+
 ## 参考文献（只列正文用到的）
 
 1. Liu, J., Stambaugh, R. F., & Yuan, Y. (2019). Size and value in China. *Journal of Financial Economics*, 134(1), 48–69. https://doi.org/10.1016/j.jfineco.2019.03.008
@@ -95,3 +104,5 @@ qlib 仓库里还有 HIST、MASTER 的 example 目录：
 8. Kakushadze, Z. (2016). 101 formulaic alphas. *Wilmott*, 2016(84), 72–80. arXiv:1601.00991
 9. Grinold, R. C., & Kahn, R. N. (2000). *Active Portfolio Management* (2nd ed.). McGraw-Hill.
 10. Ledoit, O., & Wolf, M. (2004). A well-conditioned estimator for large-dimensional covariance matrices. *Journal of Multivariate Analysis*, 88(2), 365–411.
+11. Gleason, C. A., & Lee, C. M. C. (2003). Analyst forecast revisions and market price discovery. *The Accounting Review*, 78(1), 193–225.
+12. Jegadeesh, N., Kim, J., Krische, S. D., & Lee, C. M. C. (2004). Analyzing the analysts: When do recommendations add value? *Journal of Finance*, 59(3), 1083–1124.

@@ -116,8 +116,8 @@ zk --provider live daily --date 2026-10-21
 - live 新闻/宏观**不混入**离线样本；缺真实数据写「缺数据」，利率/地缘/应急冲击不回落 fixture。
 - 宏观事件窗口只给核心数据与央行（可配白名单）；会议/展会重要度封顶且不建窗口。公开日程补未来 7 天 FOMC。
 - 经典公式（Greenblatt / Piotroski / 分红）只用可交易过滤，不套 ROE/PE 质量门槛；门槛可配。
-- live 回测用本地库前复权；增量截面只写不复权，前复权按涨跌平移。回测池用**历史时点成分**（baostock 沪深300+中证500 回查中证800；不够则用月末已上市且有日线的全 A，并在报告标明）。超额和闸门对**同池时点等权**：超额必须 > 0，且 Sharpe 不低于等权。
-- 量化分在总分里的权重按样本外 RankICIR 自动缩放，低于阈值则降权。未过闸公式分不计入总分，只在单票详情展示。应急必须有 VIX/指数价格确认，摘要写触发原因。
+- live 回测用本地库前复权；增量截面只写不复权，前复权按涨跌平移。回测池用**历史时点成分**（baostock 沪深300+中证500 回查中证800；不够则用月末已上市且有日线的全 A，并在报告标明）。超额和闸门对**同池时点等权**，对照行必须是闸门实际用的 **T+1 开盘** 等权，不是月末收盘等权。过闸前提：覆盖月数 ≥ 80%（不足标「数据不足」）；然后超额 > 0、Sharpe ≥ 等权、前后半段超额都 > 0。禁止用今日静态名单回测（前视）。
+- 量化分默认权重 0.10，只做过闸公式内排序辅助；锁定测试集 RankIC 为负时 brief 写「量化样本外未验证」。以后按前瞻实盘 RankIC 滚动更新。候选前 10 以过闸公式为主。未过闸与数据不足的公式分不计入总分，只在单票详情展示。应急必须有 VIX/指数价格确认，摘要写触发原因。
 
 **本仓库云主机实测（中证800，近 3 年，跳过港美）：**
 
@@ -127,9 +127,9 @@ zk --provider live daily --date 2026-10-21
 | 新浪明细财务（CSI800） | 约 25 分钟 | ebit 覆盖约 710/800，流动资产约 634/800 |
 | `zk data sync --incremental`（已同步池） | **1.5s** | 截面只写不复权；前复权按涨跌平移，禁止把原始价写入 qfq |
 | `zk factor train` | ~40s | 默认 **Alpha158** RankIC 0.026 RankICIR 0.177；量化权重 0.40×(0.177/0.20)=0.35。lgb_lite RankIC 0.002 RankICIR 0.015。五分位多空 +0.05%，区分度弱 |
-| `zk --provider live daily --date 2026-10-21` | ~3 min | 时点 CSI800（37/37 月，1034 只）。同池等权 **+8.66%** / -13.5% / Sharpe 0.40（不再是今日成分的 +17.6%）。四公式 +12.8%/+14.5%/+14.3%/+17.0%，对同池超额 +4.1%/+5.8%/+5.7%/+8.4%，Sharpe 均高于等权，**四个过闸**。沪深300 +7.3%；中证800 +5.6%。摘要 `/opt/cursor/artifacts/zhiku-live-2026-10-21-pit/`（不进 git） |
+| `zk --provider live daily --date 2026-10-21` | ~3 min | **诚实 PIT**：每月公告日重算 + T+1 开盘。对照行同池等权是 T+1 的 **10.34%**（不是月末收盘 8.67%）。`gate_table_live.md`（livermore +45.4%）与中间 PIT（1034，今日名单 +4%～+8%）**已作废，前视**。以 `/opt/cursor/artifacts/zhiku-investor-principles/gate_table_pit.md` 与其后重跑表为准。 |
 
-A 股全市场（`--universe all --resume`）仍在跑：约 10605/16642 次尝试，库内 qfq **5645** 只。每日增量对已入库标的应在 10 分钟内。东财 hist 会熔断改 baostock。静态今日成分的 +17.6% 等权不可与指数混读，对照表见同目录 `COMPARISON.md`。
+A 股全市场（`--universe all --resume`）仍在跑：约 10605/16642 次尝试，库内 qfq **5645** 只。每日增量对已入库标的应在 10 分钟内。东财 hist 会熔断改 baostock。静态今日成分的 +17.6% 等权与中间 PIT 的 +4%～+17% 超额都是前视，不可与诚实表横比。
 
 分红旧实现把「每10股派息」当成现金总额/市值，中证800会空篮；已修正。配置见 `config/data_sync.example.yaml` 与 `pipeline.yaml` 的 `dividend.*`。
 
@@ -150,6 +150,9 @@ A 股全市场（`--universe all --resume`）仍在跑：约 10605/16642 次尝�
 | `zk review --week` | 触发线命中率 + 事件剧本兑现 + 信源跟踪 |
 | `zk ui` | 本地看板（需 `[ui]`），含「宏观与事件」 |
 | `zk debate 600519` | 可选 TradingAgents |
+| `zk export-review` | 导出外部研判任务包（候选、截面、新闻摘录、大师清单） |
+| `zk ingest-review path.json` | 把 `zhiku.review_result.v1` 写回决策日志 |
+| `zk review-scorecard` | AI「研究跟进 / 回避」T+5、T+20 对同池等权超额，对照公式排名 |
 | `zk data sync` | 全市场增量同步到 `ZHIKU_KB/data`（可断点、限速） |
 | `zk backtest <公式\|trigger>` | 月度等权或触发线回测；live 用本地库价格 |
 | `zk factor prepare\|train\|predict` | 本地库→qlib bin→Alpha158/LightGBM |
@@ -161,6 +164,8 @@ A 股全市场（`--universe all --resume`）仍在跑：约 10605/16642 次尝�
 每条**入选**新闻结构化输出：`so_what` / `priced_in` / `impact` / `counter_view` / `next_check` / `confidence`，并分别标注**事实 / 解读 / 推测**。低价值（纯情绪、旧闻翻炒）只计数，不展开。报告以分析为主体，原文链接放附录。
 
 分析层：有 `ZHIKU_LLM_KEY` 或 `OPENAI_API_KEY` 时走 LLM；没有 key 则规则模板，并标明「未做深度分析」。测试默认无 key。
+
+研判层（`docs/ai_layer.md`）：公式/量化初筛，AI 判断候选前 10。后端 `ZHIKU_LLM_BACKEND=auto|openai|cursor|mock|external`。OpenAI 兼容走 `ZHIKU_LLM_KEY`；Cursor 走 `CURSOR_API_KEY` + `cursor-sdk`（local，失败再 Cloud Agents API）。无 key 时导出 `review-pack.json`，`zk ingest-review` 写回；`zk review-scorecard` 对账 T+5/T+20 超额。结论进 `journal/ai_decisions.jsonl`。密钥不进 git。
 
 ### 信源分级（YAML 可配）
 

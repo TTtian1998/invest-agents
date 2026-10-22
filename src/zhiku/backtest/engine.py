@@ -333,7 +333,17 @@ def _equity_to_series(result: BacktestResult) -> pd.Series:
     return pd.Series({pd.Timestamp(d): float(v) for d, v in result.equity})
 
 
+def attach_coverage(result: BacktestResult, *, n_months: int, n_covered: int) -> BacktestResult:
+    result.n_months = int(n_months)
+    result.n_covered = int(n_covered)
+    result.n_empty = max(int(n_months) - int(n_covered), 0)
+    result.coverage_ratio = (float(n_covered) / float(n_months)) if n_months else 0.0
+    return result
+
+
 def _gate(result: BacktestResult, settings: BacktestSettings) -> bool:
+    if result.insufficient_data:
+        return False
     if result.sharpe is not None and result.sharpe < settings.min_sharpe:
         return False
     if settings.require_beat_benchmark:
@@ -366,7 +376,19 @@ def finalize_gate(result: BacktestResult, settings: BacktestSettings) -> Backtes
             result.deflated_sharpe = stats["deflated_sharpe"]
             result.dsr_prob = stats["dsr_prob"]
             result.n_trials = n_trials
+    min_cov = float(getattr(settings, "min_coverage", 0.80) or 0.0)
+    if (
+        result.coverage_ratio is not None
+        and min_cov > 0
+        and result.coverage_ratio + 1e-12 < min_cov
+    ):
+        result.insufficient_data = True
+        result.passed_gate = False
+        result.gate_status = "数据不足"
+        return result
     result.passed_gate = _gate(result, settings)
+    if result.gate_status in {None, ""}:
+        result.gate_status = "通过" if result.passed_gate else "未过闸"
     return result
 
 

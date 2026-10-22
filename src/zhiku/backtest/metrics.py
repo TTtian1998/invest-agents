@@ -39,6 +39,12 @@ class BacktestResult:
     benchmarks: dict[str, dict] = field(default_factory=dict)
     sanity_ok: bool | None = None
     sanity_note: str | None = None
+    n_months: int | None = None
+    n_covered: int | None = None
+    n_empty: int | None = None
+    coverage_ratio: float | None = None
+    insufficient_data: bool = False
+    gate_status: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -71,6 +77,12 @@ class BacktestResult:
             "benchmarks": self.benchmarks,
             "sanity_ok": self.sanity_ok,
             "sanity_note": self.sanity_note,
+            "n_months": self.n_months,
+            "n_covered": self.n_covered,
+            "n_empty": self.n_empty,
+            "coverage_ratio": self.coverage_ratio,
+            "insufficient_data": self.insufficient_data,
+            "gate_status": self.gate_status,
         }
 
 

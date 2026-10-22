@@ -119,6 +119,17 @@ class MarketFetcher:
     def cn_statement_detail(self, symbol: str) -> list[dict] | MissingData:
         return MissingData("未提供明细财务", symbol=symbol)
 
+    def cn_hist_financials(
+        self, symbol: str, start: date, end: date
+    ) -> dict[str, list[dict]] | MissingData:
+        return MissingData("未提供历史季报", symbol=symbol)
+
+    def cn_hist_dividends(self, symbol: str) -> list[dict] | MissingData:
+        return self.cn_dividends(symbol)
+
+    def cn_forecast(self, symbol: str, start: date, end: date) -> list[dict] | MissingData:
+        return MissingData("未提供业绩预告", symbol=symbol)
+
 
 _EM_HIST_FAILS = 0
 _EM_HIST_SKIP_AFTER = 3
@@ -390,7 +401,7 @@ class AkshareFetcher(MarketFetcher):
             "income": (["stock_lrb_em"], "income"),
             "balance": (["stock_zcfz_em"], "balance"),
             "cashflow": (["stock_xjll_em"], "cashflow"),
-            "yjbb": (["stock_yjbb_em"], "income"),
+            "yjbb": (["stock_yjbb_em"], "yjbb"),
         }.get(kind)
         if not api:
             return MissingData(f"未知整表 {kind}")
@@ -483,6 +494,9 @@ class AkshareFetcher(MarketFetcher):
         )
 
     def cn_dividends(self, symbol: str) -> list[dict] | MissingData:
+        hist = self.cn_hist_dividends(symbol)
+        if not isinstance(hist, MissingData):
+            return hist
         code = normalize_cn(symbol)
         raw = self._ak(
             ["stock_fhps_em", "stock_history_dividend_detail"],
@@ -492,26 +506,48 @@ class AkshareFetcher(MarketFetcher):
         )
         if isinstance(raw, MissingData):
             return raw
-        df = raw
-        ex_col = _col(df, "除权除息日", "除息日", "ex_date")
-        ann_col = _col(df, "公告日期", "announced")
-        amt_col = _col(df, "派息", "现金分红", "分红金额", "amount")
-        if ex_col is None:
-            return MissingData("分红表缺除权日", symbol=symbol)
-        rows = []
-        for _, row in df.iterrows():
-            ex = _as_date(row[ex_col])
-            if ex is None:
+        from zhiku.data.detail_fin import map_ak_dividend_history
+
+        mapped = map_ak_dividend_history(code, raw)
+        return mapped
+
+    def cn_hist_dividends(self, symbol: str) -> list[dict] | MissingData:
+        """带公告日的历史分红，优先明细表，再 baostock。"""
+        from zhiku.data.detail_fin import map_ak_dividend_history
+
+        code = normalize_cn(symbol)
+        errors: list[str] = []
+        for names, kwargs in (
+            (["stock_history_dividend_detail"], {"symbol": code, "indicator": "分红"}),
+            (["stock_fhps_detail_em"], {"symbol": code}),
+            (["stock_history_dividend_detail"], {"symbol": code}),
+        ):
+            raw = self._ak(names, md_symbol=code, field="hist_div", **kwargs)
+            if isinstance(raw, MissingData):
+                errors.append(raw.reason or names[0])
                 continue
-            rows.append(
-                {
-                    "symbol": code,
-                    "ex_date": ex,
-                    "announced": _as_date(row[ann_col]) if ann_col else ex,
-                    "amount": _num(row[amt_col]) if amt_col else None,
-                }
-            )
-        return rows
+            mapped = map_ak_dividend_history(code, raw)
+            if not isinstance(mapped, MissingData):
+                return mapped
+            errors.append(mapped.reason or names[0])
+        end = date.today()
+        bs = baostock_hist_fund(code, date(end.year - 8, 1, 1), end)
+        if isinstance(bs, MissingData):
+            return MissingData("历史分红失败: " + "; ".join(errors + [bs.reason or ""]), symbol=code)
+        rows = [r for r in (bs.get("dividends") or []) if r]
+        return rows or MissingData("历史分红为空", symbol=code)
+
+    def cn_hist_financials(
+        self, symbol: str, start: date, end: date
+    ) -> dict[str, list[dict]] | MissingData:
+        return baostock_hist_fund(symbol, start, end)
+
+    def cn_forecast(self, symbol: str, start: date, end: date) -> list[dict] | MissingData:
+        raw = baostock_hist_fund(symbol, start, end)
+        if isinstance(raw, MissingData):
+            return raw
+        rows = raw.get("forecasts") or []
+        return rows or MissingData("业绩预告为空", symbol=symbol)
 
     def global_members(self, name: str) -> list[str] | MissingData:
         key = name.lower()
@@ -890,6 +926,74 @@ def baostock_index_members_hist(
         else:
             out[(code, on)] = MissingData(row.get("error") or f"空成分 {raw_code}@{on}")
     return out
+
+
+def _run_bs_worker(worker: Path, args: list[str], *, timeout: int, symbol: str) -> dict | MissingData:
+    import json
+    import subprocess
+    import sys
+
+    if not worker.is_file():
+        return MissingData(f"缺少 baostock worker {worker.name}", symbol=symbol)
+    cmd = [sys.executable, str(worker), *args]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        return MissingData("baostock 超时", symbol=symbol)
+    except Exception as exc:  # noqa: BLE001
+        return MissingData(f"baostock 拉取失败: {exc}", symbol=symbol)
+    raw_text = (proc.stdout or "").strip()
+    if not raw_text:
+        err = (proc.stderr or "").strip()[:200]
+        return MissingData(f"baostock 无输出 {err}", symbol=symbol)
+    brace = raw_text.find("{")
+    if brace < 0:
+        return MissingData("baostock 输出无法解析", symbol=symbol)
+    try:
+        payload = json.loads(raw_text[brace:])
+    except json.JSONDecodeError:
+        return MissingData("baostock 输出无法解析", symbol=symbol)
+    if payload.get("error") and not (
+        payload.get("rows") or payload.get("statements") or payload.get("dividends") or payload.get("forecasts")
+    ):
+        return MissingData(f"baostock {payload.get('error')}", symbol=symbol)
+    return payload
+
+
+def baostock_hist_fund(symbol: str, start: date, end: date) -> dict[str, list[dict]] | MissingData:
+    """子进程拉 baostock 季报/预告/分红，映射成 store 行。"""
+    from zhiku.data.detail_fin import map_baostock_dividend, map_baostock_forecast, map_baostock_statement
+
+    code = normalize_cn(symbol)
+    prefix = "sh" if code.startswith(("6", "9")) else "sz"
+    worker = Path(__file__).resolve().with_name("_bs_fund.py")
+    payload = _run_bs_worker(
+        worker,
+        [f"{prefix}.{code}", str(start.year), str(end.year)],
+        timeout=180,
+        symbol=code,
+    )
+    if isinstance(payload, MissingData):
+        return payload
+    statements: list[dict] = []
+    for raw in payload.get("statements") or []:
+        kind = str(raw.get("_kind") or "income")
+        mapped = map_baostock_statement(code, kind, raw)
+        if mapped:
+            statements.append(mapped)
+    forecasts = []
+    for raw in payload.get("forecasts") or []:
+        mapped = map_baostock_forecast(code, raw)
+        if mapped:
+            forecasts.append(mapped)
+    dividends = []
+    for raw in payload.get("dividends") or []:
+        mapped = map_baostock_dividend(code, raw)
+        if mapped:
+            dividends.append(mapped)
+    if not statements and not forecasts and not dividends:
+        return MissingData("baostock 季报/预告/分红为空", symbol=code)
+    return {"statements": statements, "forecasts": forecasts, "dividends": dividends}
 
 
 def baostock_bars(symbol: str, start: date, end: date, adjust: str) -> pd.DataFrame | MissingData:

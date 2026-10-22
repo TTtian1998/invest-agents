@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from zhiku.backtest.metrics import monthly_equal_weight, summarize_nav

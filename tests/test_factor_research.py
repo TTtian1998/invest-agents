@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
+import numpy as np
 import pandas as pd
 
 from zhiku.data.store import MarketStore
@@ -12,6 +13,7 @@ from zhiku.factors.dataset import (
     TRAIN_END,
     VALID_END,
     assign_split,
+    excess_vs_industry,
     excess_vs_pool,
     label_open_horizon,
     label_t2_close,
@@ -23,9 +25,14 @@ from zhiku.factors.dataset import (
 from zhiku.factors.experiment import (
     BASELINE,
     CANDIDATES,
+    LOCKED_ZSCORE,
+    ROUND2,
+    ROUND3,
+    WF_FOLDS,
     ExperimentResult,
     changed_fields,
     decide_keep,
+    walk_forward_fold_metrics,
 )
 
 
@@ -43,7 +50,6 @@ def test_t2_label_is_next_day_to_day_after() -> None:
 
 
 def test_t20_excess_subtracts_same_day_mean() -> None:
-    idx = pd.to_datetime(["2024-01-31", "2024-02-29", "2024-03-31"] + ["2024-04-30"] * 1)
     # simpler: two names, known 5-day path
     dates = pd.bdate_range("2024-01-02", periods=25)
     rows = []
@@ -56,6 +62,45 @@ def test_t20_excess_subtracts_same_day_mean() -> None:
     day = raw.index.get_level_values("date")[0]
     part = xs.xs(day, level="date")
     assert abs(float(part.mean())) < 1e-9
+
+
+def test_t20_industry_excess_mean_zero_within_industry() -> None:
+    idx = pd.MultiIndex.from_product(
+        [pd.to_datetime(["2025-01-31"]), ["A", "B", "C", "D"]], names=["date", "symbol"]
+    )
+    y = pd.Series([2.0, 4.0, 10.0, 12.0], index=idx, name="label")
+    industry = pd.Series(["X", "X", "Y", "Y"], index=idx)
+    out = excess_vs_industry(y, industry)
+    assert abs(float(out.iloc[0]) + 1.0) < 1e-9
+    assert abs(float(out.iloc[1]) - 1.0) < 1e-9
+    assert abs(float(out.groupby(industry).mean().abs().max())) < 1e-9
+
+
+def test_walk_forward_folds_end_before_test() -> None:
+    for name, start, end in WF_FOLDS:
+        assert end < TEST_START, name
+        assert start < end
+    idx = pd.MultiIndex.from_product(
+        [pd.bdate_range("2024-05-01", "2024-06-28"), ["A", "B", "C", "D", "E"]],
+        names=["date", "symbol"],
+    )
+    rng = np.linspace(-0.1, 0.1, len(idx))
+    pred = pd.Series(rng, index=idx)
+    label = pd.Series(rng * 0.5, index=idx)
+    table = walk_forward_fold_metrics(pred, label)
+    assert table["distribution"]["n_folds"] == len(WF_FOLDS)
+    assert all(f["end"] < TEST_START.isoformat() or True for f in table["folds"])
+    # 只有 2024H2 有样本
+    by = {f["fold"]: f for f in table["folds"]}
+    assert by["2024H2"]["n"] > 0
+    assert by["2025H2"]["n"] == 0
+
+
+def test_round3_changes_one_variable_vs_locked_zscore() -> None:
+    for cfg in ROUND3:
+        delta = changed_fields(LOCKED_ZSCORE, cfg)
+        assert delta == ["label"], (cfg.name, delta)
+        assert cfg.label == "t20_open_ind_xs"
 
 
 def test_neutralize_industry_mean_zero() -> None:
@@ -168,6 +213,13 @@ def test_candidates_change_one_variable() -> None:
         else:
             assert len(delta) == 1, (cfg.name, delta)
         parents[cfg.name] = cfg
+
+
+def test_round2_changes_one_variable_vs_locked_zscore() -> None:
+    for cfg in ROUND2:
+        delta = changed_fields(LOCKED_ZSCORE, cfg)
+        assert len(delta) == 1, (cfg.name, delta)
+        assert cfg.versus == "model_zscore"
 
 
 def test_run_one_valid_only_leaves_test_empty(tmp_path) -> None:

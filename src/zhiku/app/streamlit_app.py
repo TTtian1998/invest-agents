@@ -130,6 +130,11 @@ def main() -> None:
             st.info("还没有每日报告。请先运行 `zk --provider fixture daily --date 2026-10-20`。")
         else:
             st.write(f"截面日期：**{daily.get('asof')}**")
+            mw = daily.get("merge_weights") or {}
+            if mw.get("oos_unverified"):
+                st.warning("量化样本外未验证")
+            if mw.get("note"):
+                st.caption(str(mw["note"]))
             rows = daily.get("candidates") or []
             if rows:
                 df = pd.DataFrame(rows)
@@ -195,7 +200,14 @@ def main() -> None:
                 cols[3].metric(
                     "胜率", "缺数据" if bt.get("win_rate") is None else f"{bt['win_rate']:.1%}"
                 )
-                cols[4].metric("闸门", "通过" if bt.get("passed_gate") else "未通过")
+                status = bt.get("gate_status") or ("通过" if bt.get("passed_gate") else "未通过")
+                cols[4].metric("闸门", status)
+                cov = bt.get("coverage_ratio")
+                if cov is not None:
+                    st.caption(
+                        f"覆盖 {bt.get('n_covered')}/{bt.get('n_months')} 月（空仓 {bt.get('n_empty')}）。"
+                        "对照行须为 T+1 开盘同池等权。今日静态 Top-N 表已作废（前视）。"
+                    )
                 eq = bt.get("equity") or []
                 if eq:
                     edf = pd.DataFrame(eq, columns=["date", "nav"])
