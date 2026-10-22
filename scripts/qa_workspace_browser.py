@@ -186,6 +186,28 @@ def check_http(base: str) -> dict[str, Any]:
             "read_only_post_rejected": True, "invalid_snapshot_rejected": True}
 
 
+def assert_no_overflow(page, label: str) -> None:
+    dimensions = page.evaluate("""() => ({
+        viewport: innerWidth, documentWidth: document.documentElement.scrollWidth,
+        offenders: [...document.querySelectorAll('main *')]
+            .filter(node => node.getBoundingClientRect().right > innerWidth + 1)
+            .slice(0, 12).map(node => ({tag: node.tagName, class: node.className,
+                right: Math.round(node.getBoundingClientRect().right),
+                text: node.textContent.slice(0, 80)}))
+    })""")
+    assert dimensions["documentWidth"] <= dimensions["viewport"] + 1, (
+        f"Horizontal page overflow at {label}: {json.dumps(dimensions, ensure_ascii=False)}")
+
+
+def assert_notes_wrap(page) -> None:
+    notes = page.locator(".notes-list li").evaluate_all("""nodes => nodes.map(node => ({
+        client: node.clientWidth, scroll: node.scrollWidth,
+        overflow: getComputedStyle(node).overflowX, text: node.textContent.slice(0, 80)
+    }))""")
+    assert notes and all(node["scroll"] <= node["client"] + 1 for node in notes), notes
+    assert all(node["overflow"] not in {"hidden", "clip"} for node in notes), notes
+
+
 def run_browser(base: str, kb: Path, output: Path, result: dict[str, Any]) -> None:
     """Implemented against accessible labels/production DOM, not mock page HTML."""
     from playwright.sync_api import expect, sync_playwright
@@ -220,8 +242,7 @@ def run_browser(base: str, kb: Path, output: Path, result: dict[str, Any]) -> No
                 def capture(state: str) -> None:
                     page.screenshot(path=directory / f"{state}.png", full_page=True, animations="disabled")
                     scenario["screenshots"].append(f"{name}/{state}.png")
-                    overflow = page.evaluate("document.documentElement.scrollWidth > innerWidth + 1")
-                    assert not overflow, f"Horizontal page overflow: {name}/{state}"
+                    assert_no_overflow(page, f"{name}/{state}")
 
                 def ready() -> None:
                     expect(page.locator("#content")).to_have_attribute("aria-busy", "false")
@@ -252,7 +273,13 @@ def run_browser(base: str, kb: Path, output: Path, result: dict[str, Any]) -> No
                     expect(page.locator("#content")).to_contain_text("演示事件")
                     capture("06-evidence")
                     navigate("validation")
+                    assert_notes_wrap(page)
                     capture("07-validation")
+                    page.get_by_text("查看快照标识与验收元数据", exact=True).click()
+                    expect(page.locator("details.disclosure")).to_have_attribute("open", "")
+                    capture("07b-validation-metadata")
+                    page.get_by_text("查看快照标识与验收元数据", exact=True).click()
+                    expect(page.locator("details.disclosure")).not_to_have_attribute("open", "")
                     page.go_back()
                     expect(page).to_have_url(base + "/#evidence")
                     page.go_forward()
@@ -459,9 +486,18 @@ def run_pipeline_browser(base: str, output: Path, result: dict[str, Any]) -> Non
                             if route == "universe":
                                 expect(page.locator("#content")).to_contain_text("当前没有正式候选")
                         expect(page.locator("#page-title")).to_be_visible()
-                        assert not page.evaluate("document.documentElement.scrollWidth > innerWidth + 1")
+                        assert_no_overflow(page, f"pipeline/{name}/{shot}")
                         page.screenshot(path=directory / f"{shot}.png", full_page=True, animations="disabled")
                         scenario["screenshots"].append(f"pipeline/{name}/{shot}.png")
+                        if route == "validation":
+                            assert_notes_wrap(page)
+                            page.get_by_text("查看快照标识与验收元数据", exact=True).click()
+                            expect(page.locator("details.disclosure")).to_have_attribute("open", "")
+                            assert_no_overflow(page, f"pipeline/{name}/05b-validation-metadata")
+                            page.screenshot(path=directory / "05b-validation-metadata.png", full_page=True, animations="disabled")
+                            scenario["screenshots"].append(f"pipeline/{name}/05b-validation-metadata.png")
+                            page.get_by_text("查看快照标识与验收元数据", exact=True).click()
+                            expect(page.locator("details.disclosure")).not_to_have_attribute("open", "")
                     assert not errors, errors
                     assert all(url.startswith(base + "/") for url in requests), requests
                     scenario["status"] = "passed"

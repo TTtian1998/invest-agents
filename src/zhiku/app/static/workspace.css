@@ -542,6 +542,7 @@ h1 {
   gap: 20px;
 }
 .panel {
+  min-width: 0;
   background: #fff;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -1075,8 +1076,12 @@ tbody tr:hover {
 }
 .validation-grid {
   display: grid;
-  grid-template-columns: 1.1fr 1fr;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
   gap: 20px;
+}
+/* Grid children must not size the page from long artifact IDs. */
+.validation-grid > * {
+  min-width: 0;
 }
 .definition-list {
   display: grid;
@@ -1141,6 +1146,7 @@ tbody tr:hover {
   flex-shrink: 0;
 }
 .notes-list {
+  overflow-wrap: anywhere;
   padding: 0 0 0 16px;
   display: grid;
   gap: 10px;
@@ -1416,7 +1422,7 @@ dialog::backdrop {
     height: 61px;
   }
   .validation-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .toast {
     left: calc(50% + 103px);
@@ -1655,4 +1661,55 @@ dialog::backdrop {
   margin-top: 22px;
 }
 /* Research data stays readable at a standard laptop viewport. */
-table{font-size:12px}.panel-head p,.page-heading p{font-size:12px}.summary-label{font-size:12px}.summary-note{font-size:11px}.chart-row{font-size:12px}.source-row,.review-step,.event-info{font-size:12px}.stock-code{font-size:10px}
+table {
+  font-size: 12px;
+}
+.panel-head p,
+.page-heading p {
+  font-size: 12px;
+}
+.summary-label {
+  font-size: 12px;
+}
+.summary-note {
+  font-size: 11px;
+}
+.chart-row {
+  font-size: 12px;
+}
+.source-row,
+.review-step,
+.event-info {
+  font-size: 12px;
+}
+.stock-code {
+  font-size: 10px;
+}
+/* Secondary evidence is readable content, not decorative low-contrast chrome. */
+.heading-eyebrow,
+.summary-note:not(.caution),
+.panel-foot,
+.chart-row small,
+.chart-axis,
+.chart-legend,
+.review-step p,
+th,
+.stock-code,
+.cell-secondary,
+.event-info p,
+.source-row small,
+.news-meta,
+.definition-list dt,
+.status-row small,
+.notes-list {
+  color: var(--muted);
+}
+.definition-list,
+.inline-notice,
+.muted-card,
+.disclosure summary {
+  font-size: 12px;
+}
+.notes-list {
+  font-size: 13px;
+}

@@ -8,6 +8,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+from click import unstyle
 from typer.testing import CliRunner
 
 pytest.importorskip("fastapi")
@@ -313,10 +314,17 @@ def test_allowlist_rejects_unsafe_urls_and_redacts_prefixed_keys(client, paths, 
         assert secret not in response.text
 
 
-def test_cli_rejects_wildcard_allowed_host(paths):
-    result = CliRunner().invoke(cli, ["--kb", str(paths.kb), "ui", "--allow-host", "*"])
-    assert result.exit_code != 0
-    assert "--allow-host" in result.output
+@pytest.mark.parametrize("force_color", [False, True], ids=["default", "forced-color"])
+def test_cli_rejects_wildcard_allowed_host(paths, force_color):
+    result = CliRunner().invoke(
+        cli, ["--kb", str(paths.kb), "ui", "--allow-host", "*"],
+        color=force_color,
+        env={"FORCE_COLOR": "1", "TERM": "xterm-256color"} if force_color else {},
+    )
+    assert result.exit_code == 2
+    if force_color:
+        assert "\x1b[" in result.output  # Exercise Rich's split ANSI-styled option.
+    assert "--allow-host" in unstyle(result.output)
 
 
 @pytest.mark.parametrize("broken", ["status", "reason", "version", "evaluated_asof", "statuses"])
