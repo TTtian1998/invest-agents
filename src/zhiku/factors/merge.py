@@ -64,7 +64,7 @@ def scale_merge_settings(
         unverified = True
         if rank_ic is None:
             note = (
-                f"{OOS_UNVERIFIED_NOTE}。锁定测试集 RankIC 为负，量化分权重 {effective:.2f}，"
+                f"{OOS_UNVERIFIED_NOTE}。未提供可用的前瞻 RankIC，量化分权重 {effective:.2f}，"
                 "仅做过闸公式内排序辅助。以后按前瞻实盘 RankIC 滚动更新。"
             )
         else:
@@ -112,7 +112,7 @@ def merge_scores(
 ) -> list[ScoredCandidate]:
     qlib = qlib or {}
     formula_first = bool(getattr(settings, "formula_first", True))
-    if formula_first and formula:
+    if formula_first:
         symbols = set(formula)
     else:
         symbols = set(formula) | set(qlib)

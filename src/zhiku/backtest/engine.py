@@ -178,6 +178,9 @@ def attach_benchmarks(
             "max_drawdown": v.get("max_drawdown"),
             "sharpe": v.get("sharpe"),
             "notes": v.get("notes"),
+            "engine": v.get("engine"),
+            "fill": v.get("fill"),
+            "close_fallback_fills": v.get("close_fallback_fills"),
         }
         for k, v in payload.items()
     }

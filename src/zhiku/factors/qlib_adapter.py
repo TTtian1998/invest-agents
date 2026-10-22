@@ -2,7 +2,7 @@
 
 `zk factor prepare` 把本地库日线写成 qlib bin。
 `zk factor train` 优先走 pyqlib Alpha158；失败或未安装则用 pandas 特征 + LightGBM。
-没模型时预测返回空 dict，日报写「未训练」。
+研究训练不会自动发布。正式推理只读取显式批准的版本；不可用时返回空 dict。
 """
 
 from __future__ import annotations
@@ -20,6 +20,18 @@ from zhiku.calendar import now_shanghai
 from zhiku.data.codes import qlib_instrument
 from zhiku.data.store import MarketStore
 from zhiku.factors.features import FEATURE_NAMES, asof_feature_row, label_forward, make_feature_panel
+from zhiku.factors.model_artifacts import (
+    DEFAULT_MAX_AGE_DAYS,
+    ModelArtifact,
+    ModelArtifactError,
+    artifact_digest,
+    atomic_write,
+    load_research_model,
+    publish_model,  # noqa: F401 - public training/publication API
+    provider_identity,
+    resolve_published_model,
+    validate_payload,
+)
 
 QLIB_HINT = """未安装量化因子 extra。
 
@@ -138,44 +150,19 @@ def _write_bin(series: pd.Series, calendar: pd.Index, path: Path) -> None:
     payload.tofile(path)
 
 
-def latest_model(models_dir: Path) -> tuple[Path | None, dict[str, Any] | None]:
-    models_dir = Path(models_dir)
-    if not models_dir.is_dir():
+def latest_model(
+    models_dir: Path, *, asof: date | None = None, provider_kind: str = "live",
+    config_fingerprint: str | None = None, max_age_days: int = DEFAULT_MAX_AGE_DAYS,
+) -> tuple[Path | None, dict[str, Any] | None]:
+    """Compatibility name: resolve only an approved model, never newest filenames."""
+    try:
+        artifact = resolve_published_model(
+            models_dir, asof=asof or now_shanghai().date(), provider_kind=provider_kind,
+            config_fingerprint=config_fingerprint, max_age_days=max_age_days,
+        )
+    except ModelArtifactError:
         return None, None
-    panel_pkl = models_dir / "lgb_panel.pkl"
-    panel_meta = models_dir / "lgb_panel.meta.json"
-    recipe = models_dir / "locked_recipe.json"
-    if recipe.is_file() and panel_pkl.is_file():
-        meta = {}
-        if panel_meta.is_file():
-            meta = json.loads(panel_meta.read_text(encoding="utf-8"))
-        meta.setdefault("path", str(panel_pkl))
-        meta.setdefault("status", "trained")
-        return panel_pkl, meta
-    selected_pkl = models_dir / "selected.pkl"
-    selected_meta = models_dir / "selected.meta.json"
-    if selected_pkl.is_file():
-        meta = {}
-        if selected_meta.is_file():
-            meta = json.loads(selected_meta.read_text(encoding="utf-8"))
-        meta.setdefault("path", str(selected_pkl))
-        meta.setdefault("status", "trained")
-        return selected_pkl, meta
-    metas = sorted(
-        [p for p in models_dir.glob("*.meta.json") if p.name != "selected.meta.json"],
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    if not metas:
-        pkls = sorted(models_dir.glob("*.pkl"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if not pkls:
-            return None, None
-        return pkls[0], {"status": "trained", "path": str(pkls[0]), "ic": None, "rank_ic": None}
-    meta = json.loads(metas[0].read_text(encoding="utf-8"))
-    pkl = Path(meta.get("path") or metas[0].with_suffix(".pkl"))
-    if not pkl.is_file():
-        pkl = metas[0].with_name(metas[0].name.replace(".meta.json", ".pkl"))
-    return (pkl if pkl.is_file() else None), meta
+    return artifact.path, artifact.metadata
 
 
 def needs_retrain(meta: dict[str, Any] | None, asof: date) -> bool:
@@ -188,7 +175,7 @@ def needs_retrain(meta: dict[str, Any] | None, asof: date) -> bool:
         d = date.fromisoformat(str(trained)[:10])
     except ValueError:
         return True
-    return (d.year, d.month) < (asof.year, asof.month)
+    return d > asof or (d.year, d.month) < (asof.year, asof.month)
 
 
 def _score_tuple(meta: dict[str, Any]) -> tuple[float, float, float]:
@@ -284,13 +271,16 @@ def train_model(
     store: MarketStore | None,
     start: date | None = None,
     end: date | None = None,
+    provider_kind: str = "live",
+    config_fingerprint: str | None = None,
 ) -> str:
     model_path = Path(model_path)
     model_path.parent.mkdir(parents=True, exist_ok=True)
     notes: list[str] = []
     if qlib_available():
         try:
-            msg = _train_qlib(Path(qlib_dir), model_path)
+            msg = _train_qlib(Path(qlib_dir), model_path, provider_kind=provider_kind,
+                              config_fingerprint=config_fingerprint)
             notes.append(msg)
             return msg
         except Exception as exc:  # noqa: BLE001
@@ -299,7 +289,8 @@ def train_model(
         raise QlibNotInstalled(QLIB_HINT.strip() + "\n也需要 lightgbm。")
     if store is None:
         raise QlibNotInstalled("未提供本地库，无法走 pandas 训练。请先 zk data sync。")
-    meta = _train_lgb_lite(store, model_path, start=start, end=end)
+    meta = _train_lgb_lite(store, model_path, start=start, end=end,
+                           provider_kind=provider_kind, config_fingerprint=config_fingerprint)
     meta["notes"] = notes
     _write_meta(model_path, meta)
     return (
@@ -308,7 +299,10 @@ def train_model(
     )
 
 
-def _train_qlib(qlib_dir: Path, model_path: Path) -> str:
+def _train_qlib(
+    qlib_dir: Path, model_path: Path, *, provider_kind: str = "live",
+    config_fingerprint: str | None = None,
+) -> str:
     import os
 
     os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
@@ -357,11 +351,13 @@ def _train_qlib(qlib_dir: Path, model_path: Path) -> str:
 
     dataset = init_cfg(dataset_config)
     model = LGBModel(loss="mse", num_leaves=64, num_boost_round=80, learning_rate=0.05)
+    train_frame = dataset.prepare("train", col_set="feature")
+    if train_frame.empty or not len(train_frame.columns):
+        raise RuntimeError("qlib 训练样本或特征为空")
     model.fit(dataset)
-    model_path.parent.mkdir(parents=True, exist_ok=True)
-    with model_path.open("wb") as fh:
-        pickle.dump({"kind": "qlib_lgb", "model": model}, fh)
     pred = model.predict(dataset, segment="test")
+    if pred.empty or not np.isfinite(np.asarray(pred, dtype=float)).all():
+        raise RuntimeError("qlib 样本外预测为空或非有限值")
     ic = rank_ic = icir = None
     quintiles: dict[str, float] = {}
     try:
@@ -388,8 +384,13 @@ def _train_qlib(qlib_dir: Path, model_path: Path) -> str:
     except Exception:  # noqa: BLE001
         pass
     meta = {
-        "kind": "qlib_alpha158",
+        "kind": "qlib_lgb",
         "trained_on": now_shanghai().date().isoformat(),
+        "provider_kind": provider_identity(provider_kind),
+        "config_fingerprint": config_fingerprint,
+        "data_asof": days[-1],
+        "n_train": len(train_frame),
+        "features": [str(c) for c in train_frame.columns],
         "ic": ic,
         "rank_ic": rank_ic,
         "rank_icir": icir,
@@ -400,7 +401,8 @@ def _train_qlib(qlib_dir: Path, model_path: Path) -> str:
         "qlib_dir": str(qlib_dir),
         "status": "trained",
     }
-    _write_meta(model_path, meta)
+    _write_artifact_files(model_path, pickle.dumps({"kind": "qlib_lgb", "model": model,
+                                                   "features": meta["features"]}), meta)
     return f"qlib Alpha158+LightGBM 已保存 {model_path}；IC={ic} RankIC={rank_ic}"
 
 
@@ -410,6 +412,8 @@ def _train_lgb_lite(
     *,
     start: date | None = None,
     end: date | None = None,
+    provider_kind: str = "live",
+    config_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     import lightgbm as lgb
 
@@ -453,11 +457,12 @@ def _train_lgb_lite(
         icir = stats.get("rank_icir")
         quintiles = _quintile_returns(pd.Series(pred), test["label"].reset_index(drop=True), oos_dates)
     payload = {"kind": "lgb_lite", "model": booster, "features": FEATURE_NAMES}
-    with model_path.open("wb") as fh:
-        pickle.dump(payload, fh)
-    return {
+    meta = {
         "kind": "lgb_lite",
         "trained_on": now_shanghai().date().isoformat(),
+        "provider_kind": provider_identity(provider_kind),
+        "config_fingerprint": config_fingerprint,
+        "data_asof": pd.Timestamp(bars["date"].max()).date().isoformat(),
         "ic": ic,
         "rank_ic": rank_ic,
         "rank_icir": icir,
@@ -472,6 +477,8 @@ def _train_lgb_lite(
         "status": "trained",
         "features": FEATURE_NAMES,
     }
+    _save_training_artifact(model_path, payload, meta)
+    return meta
 
 
 def train_panel_recipe(
@@ -479,6 +486,8 @@ def train_panel_recipe(
     models_dir: Path,
     *,
     asof: date | None = None,
+    provider_kind: str = "live",
+    config_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     """用验证集锁过的配方训练面板模型；测试集指标只记录不回写调参。"""
     from zhiku.factors.experiment import ExperimentConfig, run_one
@@ -501,21 +510,30 @@ def train_panel_recipe(
     except (OSError, TypeError, json.JSONDecodeError, KeyError) as exc:
         return {"status": "skipped", "notes": [f"locked_recipe.json 无法读取：{exc}"]}
     res, pred, model = run_one(store, cfg, asof=asof, report_splits=("valid",))
+    if res.n_train <= 0 or pred.empty or not np.isfinite(np.asarray(pred, dtype=float)).all():
+        return {"status": "failed", "reason": "empty_training",
+                "notes": [*res.notes, "训练样本或有效预测为空，不覆盖现有研究模型"]}
     path = Path(models_dir) / "lgb_panel.pkl"
-    path.parent.mkdir(parents=True, exist_ok=True)
     feat_names = []
     kind = "lgb_panel"
-    if cfg.model == "zscore" or (isinstance(model, dict) and model.get("kind") == "zscore"):
+    if cfg.model == "zscore" and isinstance(model, dict) and model.get("kind") == "zscore":
         kind = "zscore_panel"
-        feat_names = list((model or {}).get("features") or [])
+        feat_names = list(model.get("features") or [])
         model = None
     elif model is not None and hasattr(model, "feature_name"):
         feat_names = list(model.feature_name())
-    with path.open("wb") as fh:
-        pickle.dump({"kind": kind, "model": model, "features": feat_names, "config": cfg.__dict__}, fh)
+    payload = {"kind": kind, "model": model, "features": feat_names, "config": cfg.__dict__}
+    # The research frame may read beyond its requested membership asof. Record
+    # the actual input bound, not a historical date supplied by the caller.
+    input_bars = store.bars(adjust="qfq")
+    data_asof = None if input_bars.empty else pd.Timestamp(input_bars["date"].max()).date().isoformat()
+    del input_bars
     meta = {
         "kind": kind,
         "trained_on": now_shanghai().date().isoformat(),
+        "provider_kind": provider_identity(provider_kind),
+        "config_fingerprint": config_fingerprint,
+        "data_asof": data_asof,
         "ic": ((res.valid.get("t20_xs") or {}) or {}).get("rank_ic"),
         "rank_ic": (res.valid.get("t20_xs") or res.valid.get("own_label") or {}).get("rank_ic"),
         "rank_icir": (res.valid.get("t20_xs") or res.valid.get("own_label") or {}).get("rank_icir"),
@@ -534,7 +552,11 @@ def train_panel_recipe(
         "features": feat_names,
         "config": cfg.__dict__,
     }
-    _write_meta(path, meta)
+    try:
+        _save_training_artifact(path, payload, meta)
+    except ModelArtifactError as exc:
+        return {"status": "failed", "reason": exc.reason,
+                "notes": [*res.notes, str(exc), "不覆盖现有研究模型"]}
     return meta
 
 
@@ -545,14 +567,17 @@ def train_and_select(
     store: MarketStore,
     start: date | None = None,
     end: date | None = None,
+    provider_kind: str = "live",
+    config_fingerprint: str | None = None,
 ) -> dict[str, Any]:
-    """训练 lgb_lite，尝试 Alpha158；按 RankICIR → RankIC 均值选默认。"""
+    """研究候选比较：训练并选优，但不批准为日报模型。"""
     models_dir = Path(models_dir)
     models_dir.mkdir(parents=True, exist_ok=True)
     lite_path = models_dir / "lgb_lite.pkl"
     qlib_path = models_dir / "lgb_alpha158.pkl"
     comparison: dict[str, Any] = {"notes": []}
-    lite_meta = _train_lgb_lite(store, lite_path, start=start, end=end)
+    lite_meta = _train_lgb_lite(store, lite_path, start=start, end=end,
+                                provider_kind=provider_kind, config_fingerprint=config_fingerprint)
     _write_meta(lite_path, lite_meta)
     comparison["lgb_lite"] = {
         k: lite_meta.get(k)
@@ -561,7 +586,8 @@ def train_and_select(
     qlib_meta: dict[str, Any] | None = None
     if qlib_available():
         try:
-            msg = _train_qlib(Path(qlib_dir), qlib_path)
+            msg = _train_qlib(Path(qlib_dir), qlib_path, provider_kind=provider_kind,
+                              config_fingerprint=config_fingerprint)
             qlib_meta = json.loads((qlib_path.with_name("lgb_alpha158.meta.json")).read_text(encoding="utf-8"))
             qlib_meta["notes_msg"] = msg
         except Exception as exc:  # noqa: BLE001
@@ -581,10 +607,10 @@ def train_and_select(
     winner["comparison"] = comparison
     selected_path = models_dir / "selected.pkl"
     src = Path(winner.get("path") or lite_path)
-    if src.is_file():
-        selected_path.write_bytes(src.read_bytes())
-        winner["path"] = str(selected_path)
-    _write_meta(selected_path, winner)
+    if not src.is_file():
+        raise RuntimeError("选中的研究模型不存在，不覆盖上一次选优结果")
+    winner["path"] = str(selected_path)
+    _write_artifact_files(selected_path, src.read_bytes(), winner)
     (models_dir / "comparison.json").write_text(
         json.dumps(comparison, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -592,17 +618,52 @@ def train_and_select(
     return winner
 
 
-def _write_meta(model_path: Path, meta: dict[str, Any]) -> None:
+def _metadata_bytes(model_path: Path, meta: dict[str, Any], content: bytes) -> bytes:
     meta = dict(meta)
     meta.setdefault("path", str(model_path))
     meta.setdefault(
         "saved_at",
         datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
     )
-    path = model_path.with_suffix(".meta.json") if model_path.suffix == ".pkl" else Path(str(model_path) + ".meta.json")
-    if model_path.name.endswith(".pkl"):
-        path = model_path.with_name(model_path.stem + ".meta.json")
-    path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    meta["artifact_sha256"] = artifact_digest(content)
+
+    def finite_json(value: Any) -> Any:
+        if isinstance(value, float) and not np.isfinite(value):
+            return None
+        if isinstance(value, dict):
+            return {k: finite_json(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [finite_json(v) for v in value]
+        return value
+
+    return json.dumps(finite_json(meta), ensure_ascii=False, indent=2, allow_nan=False).encode("utf-8")
+
+
+def _write_meta(model_path: Path, meta: dict[str, Any]) -> None:
+    content = _metadata_bytes(model_path, meta, model_path.read_bytes())
+    atomic_write(model_path.with_suffix(".meta.json"), content)
+
+
+def _save_training_artifact(path: Path, payload: dict[str, Any], meta: dict[str, Any]) -> None:
+    # Validation and serialization precede replacement of the last successful
+    # research artifact. Readers reject any in-flight mixed pair by its hash.
+    validate_payload(payload, meta, probe=True)
+    _write_artifact_files(path, pickle.dumps(payload), meta)
+
+
+def _write_artifact_files(path: Path, content: bytes, meta: dict[str, Any]) -> None:
+    metadata = _metadata_bytes(path, meta, content)
+    previous = path.read_bytes() if path.exists() else None
+    atomic_write(path, content)
+    try:
+        atomic_write(path.with_suffix(".meta.json"), metadata)
+    except Exception:
+        # A failed metadata write must not discard the last good candidate.
+        if previous is None:
+            path.unlink(missing_ok=True)
+        else:
+            atomic_write(path, previous)
+        raise
 
 
 def predict_scores(
@@ -613,24 +674,71 @@ def predict_scores(
     asof: date | None = None,
     symbols: list[str] | None = None,
     models_dir: Path | None = None,
+    provider_kind: str = "live",
+    config_fingerprint: str | None = None,
+    max_age_days: int = DEFAULT_MAX_AGE_DAYS,
 ) -> dict[str, float]:
-    """返回 symbol -> 0-100 分。没模型或不可用则空 dict。"""
+    """Return scores for the approved model; explicit model_path is research-only.
+
+    No candidate discovery, training, publication, or alternate-model fallback
+    occurs here. An unavailable or incompatible artifact produces no scores.
+    """
     del qlib_dir
-    path = Path(model_path) if model_path else None
-    meta = None
-    if path is None or not path.is_file():
-        if models_dir is not None:
-            path, meta = latest_model(Path(models_dir))
-        if path is None or not path.is_file():
-            return {}
-    try:
-        with path.open("rb") as fh:
-            payload = pickle.load(fh)
-    except Exception:
-        return {}
+    asof = asof or now_shanghai().date()
     if store is None:
         return {}
+    try:
+        if model_path is not None:
+            artifact = load_research_model(Path(model_path))
+        elif models_dir is not None:
+            artifact = resolve_published_model(
+                models_dir, asof=asof, provider_kind=provider_kind,
+                config_fingerprint=config_fingerprint, max_age_days=max_age_days,
+            )
+        else:
+            return {}
+    except ModelArtifactError:
+        return {}
+    return _predict_artifact_scores(artifact, store=store, asof=asof, symbols=symbols)
+
+
+def predict_published_scores(
+    models_dir: Path | None,
+    *,
+    store: MarketStore | None = None,
+    asof: date | None = None,
+    symbols: list[str] | None = None,
+    provider_kind: str = "live",
+    config_fingerprint: str | None = None,
+    max_age_days: int = DEFAULT_MAX_AGE_DAYS,
+) -> tuple[dict[str, float], dict[str, Any]]:
+    """Score and report one pinned publication, even if approval changes mid-run.
+
+    Metadata describes the exact validated payload used for inference. A caller
+    must still treat empty scores as unavailable for merging into its report.
+    """
     asof = asof or now_shanghai().date()
+    try:
+        if models_dir is None:
+            raise ModelArtifactError("not_published", "尚未显式发布可用模型")
+        artifact = resolve_published_model(
+            models_dir, asof=asof, provider_kind=provider_kind,
+            config_fingerprint=config_fingerprint, max_age_days=max_age_days,
+        )
+    except ModelArtifactError as exc:
+        return {}, _unavailable_model_status(exc)
+    scores = (
+        _predict_artifact_scores(artifact, store=store, asof=asof, symbols=symbols)
+        if store is not None else {}
+    )
+    return scores, dict(artifact.metadata)
+
+
+def _predict_artifact_scores(
+    artifact: ModelArtifact, *, store: MarketStore, asof: date,
+    symbols: list[str] | None = None,
+) -> dict[str, float]:
+    payload = artifact.payload
     bars = store.bars(symbols, end=asof, adjust="qfq")
     if bars.empty:
         return {}
@@ -664,30 +772,20 @@ def predict_scores(
         X = feats.reindex(columns=cols)
         if payload.get("kind") == "zscore_panel" or cfg.get("model") == "zscore":
             z = X.astype(float)
-            pred = ((z - z.mean()) / z.std(ddof=0).replace(0, np.nan)).mean(axis=1)
-            series = pred
+            std = z.std(ddof=0)
+            standardized = (z - z.mean()) / std.replace(0, np.nan)
+            standardized.loc[:, std == 0] = 0.0
+            series = standardized.mean(axis=1)
         else:
             if model is None:
                 return {}
-            pred = model.predict(X)
-            series = pd.Series(pred, index=feats.index)
+            try:
+                pred = model.predict(X)
+                series = pd.Series(pred, index=feats.index)
+            except Exception:
+                return {}
     else:
-        lite = None
-        if models_dir is not None:
-            lite_path = Path(models_dir) / "lgb_lite.pkl"
-            if lite_path.is_file():
-                try:
-                    with lite_path.open("rb") as fh:
-                        lite = pickle.load(fh)
-                except Exception:
-                    lite = None
-        if not (isinstance(lite, dict) and lite.get("kind") == "lgb_lite"):
-            return {}
-        model = lite["model"]
-        cols = lite.get("features") or FEATURE_NAMES
-        X = feats.reindex(columns=cols)
-        pred = model.predict(X)
-        series = pd.Series(pred, index=feats.index)
+        return {}
     series = series.replace([np.inf, -np.inf], np.nan).dropna()
     if series.empty:
         return {}
@@ -699,14 +797,34 @@ def predict_scores(
     return {str(k): float(v) for k, v in scaled.items()}
 
 
-def model_status(models_dir: Path | None, model_path: Path | None = None) -> dict[str, Any]:
-    if model_path and Path(model_path).is_file():
-        meta_path = Path(model_path).with_name(Path(model_path).stem + ".meta.json")
-        if meta_path.is_file():
-            return json.loads(meta_path.read_text(encoding="utf-8"))
-        return {"status": "trained", "path": str(model_path), "ic": None, "rank_ic": None}
-    if models_dir:
-        _, meta = latest_model(Path(models_dir))
-        if meta:
-            return meta
-    return {"status": "未训练", "ic": None, "rank_ic": None, "trained_on": None}
+def model_status(
+    models_dir: Path | None,
+    model_path: Path | None = None,
+    *,
+    asof: date | None = None,
+    provider_kind: str = "live",
+    config_fingerprint: str | None = None,
+    max_age_days: int = DEFAULT_MAX_AGE_DAYS,
+) -> dict[str, Any]:
+    """Read publication readiness and a machine-readable refusal reason."""
+    try:
+        if model_path is not None:
+            artifact = load_research_model(Path(model_path))
+            return {**artifact.metadata, "available": True, "publication_status": "research"}
+        if models_dir is None:
+            raise ModelArtifactError("not_published", "尚未显式发布可用模型")
+        artifact = resolve_published_model(
+            models_dir, asof=asof or now_shanghai().date(), provider_kind=provider_kind,
+            config_fingerprint=config_fingerprint, max_age_days=max_age_days,
+        )
+        return artifact.metadata
+    except ModelArtifactError as exc:
+        return _unavailable_model_status(exc)
+
+
+def _unavailable_model_status(exc: ModelArtifactError) -> dict[str, Any]:
+    return {
+        "status": "未训练" if exc.reason == "not_published" else "unavailable",
+        "available": False, "reason": exc.reason, "notes": [str(exc)],
+        "ic": None, "rank_ic": None, "trained_on": None,
+    }

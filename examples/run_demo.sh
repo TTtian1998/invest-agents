@@ -2,7 +2,9 @@
 # 用 FixtureProvider 跑一遍全部命令（离线）。
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export ZHIKU_KB="${ROOT}/examples/kb"
+export ZHIKU_KB="${ZHIKU_KB:-${ROOT}/examples/kb}"
+export ZHIKU_LLM_BACKEND=external
+export ZHIKU_ANALYSIS_LLM=0
 export ZHIKU_FIXTURES="${ROOT}/examples/fixtures"
 cd "${ROOT}"
 
@@ -16,7 +18,8 @@ zk --provider fixture close --date 2026-10-20
 zk --provider fixture exposure
 zk --provider fixture review --week --end 2026-10-23
 zk --provider fixture screen all
-zk --provider fixture daily --date 2026-10-20
+zk --provider demo run-daily --force --date 2026-10-20
+zk --provider demo export-review --date 2026-10-20
 zk --provider fixture news --date 2026-10-20
 zk --provider fixture macro --date 2026-10-20
 

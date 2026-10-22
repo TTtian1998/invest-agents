@@ -187,7 +187,10 @@ def test_store_roundtrip_and_pit(tmp_path: Path) -> None:
     assert by["600519"].net_income == 50.0
     assert by["600519"].ebit == 80.0
     assert by["600519"].net_income != 999.0  # 未公告不得进入
-    assert by["600519"].pe_percentile is not None
+    assert by["600519"].pe_percentile is None  # January spot must not pretend to be October valuation.
+    store.upsert_spot(date(2026, 10, 20), [{"symbol": "600519", "pe": 20., "pb": 3., "mktcap": 1000.}])
+    fresh, _, _ = build_fundamentals(store, date(2026, 10, 20), universe="csi800")
+    assert next(r for r in fresh if r.symbol == "600519").pe_percentile is not None
     assert "缺数据" in "".join(notes) or "截面" in "".join(notes)
 
 
@@ -512,3 +515,12 @@ def test_lgb_train_predict_fictional(tmp_path: Path) -> None:
     scores = predict_scores(None, str(model), store=store, asof=dates[-6].date(), models_dir=tmp_path / "models")
     assert scores
     assert all(0 <= v <= 100 for v in scores.values())
+
+
+
+def test_daily_membership_never_uses_future_index_snapshot(tmp_path):
+    from zhiku.data.universe_live import resolve_universe_symbols
+    store = MarketStore(tmp_path / "data")
+    store.upsert_index_members("000906", date(2026, 10, 22), ["600519"])
+    assert resolve_universe_symbols(store, "csi800", date(2026, 10, 21)) == []
+    assert resolve_universe_symbols(store, "csi800", date(2026, 10, 22)) == ["600519"]

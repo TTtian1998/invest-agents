@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -12,7 +13,7 @@ from zhiku.ai.backend import MockBackend, resolve_backend
 from zhiku.ai.extract import extract_text_factor, factor_value
 from zhiku.ai.journal import DecisionJournal
 from zhiku.ai.judge import judge_symbol
-from zhiku.ai.pack import RESULT_SCHEMA, build_review_pack, load_review_result, result_from_parts, write_review_pack
+from zhiku.ai.pack import RESULT_SCHEMA, build_review_pack, load_review_result, result_from_parts, save_review_snapshot, write_review_pack
 from zhiku.ai.regime import advise_regime
 from zhiku.ai.schema import CitedClaim, Judgment, ReviewResult
 from zhiku.ai.scorecard import build_scorecard
@@ -198,6 +199,17 @@ def test_cli_ingest_and_scorecard(tmp_path: Path, examples_dir: Path) -> None:
         '"short":[{"claim":"动量未知","cite":"momentum_12_1"}]}]}',
         encoding="utf-8",
     )
+    from zhiku.config import Paths
+
+    paths = Paths.load(kb=tmp_path, fixtures=examples_dir / "fixtures")
+    pack = build_review_pack(
+        asof=date(2026, 1, 31), candidates=[{"symbol": "000333"}],
+        rows=[_row(symbol="000333")], masters=["graham"],
+    )
+    save_review_snapshot(paths.reports, pack)
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    payload["snapshot_id"] = pack["snapshot_id"]
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
     ingested = RUNNER.invoke(app, ["--provider", "fixture", "ingest-review", str(result_path)], env=env)
     assert ingested.exit_code == 0, ingested.output
     scored = RUNNER.invoke(app, ["--provider", "fixture", "review-scorecard"], env=env)
@@ -246,12 +258,12 @@ def test_run_ai_layer_mock_journals(tmp_path: Path, examples_dir: Path) -> None:
     assert result is not None
     assert result.backend == "mock"
     assert result.judgments and result.judgments[0].long_case[0].cite
-    assert result.regime and result.regime.prefer_screens
-    assert result.extractions and result.extractions[0].direction == 1
+    assert result.snapshot_id
+    assert result.regime is None and result.extractions == []
     assert pack is not None and pack.is_file()
     journal = DecisionJournal(paths.journal / "ai_decisions.jsonl")
     rows = journal.read()
-    assert {"extraction", "judgment", "regime"} <= {r["kind"] for r in rows}
+    assert {"judgment", "review_result"} <= {r["kind"] for r in rows}
     assert all(r.get("ts") for r in rows)
     del notes
 

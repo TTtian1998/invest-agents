@@ -35,6 +35,7 @@ class BacktestResult:
     two_way_cost_bps: float | None = None
     blocked_buys: int | None = None
     fill: str | None = None
+    close_fallback_fills: int | None = None
     robustness: dict = field(default_factory=dict)
     benchmarks: dict[str, dict] = field(default_factory=dict)
     sanity_ok: bool | None = None
@@ -73,6 +74,7 @@ class BacktestResult:
             "two_way_cost_bps": self.two_way_cost_bps,
             "blocked_buys": self.blocked_buys,
             "fill": self.fill,
+            "close_fallback_fills": self.close_fallback_fills,
             "robustness": self.robustness,
             "benchmarks": self.benchmarks,
             "sanity_ok": self.sanity_ok,
@@ -369,10 +371,13 @@ def rebalance_equal_weight(
         if fill != "decision_close" and op is not None:
             close_row = px.loc[fill_dt]
             row = row.copy()
+            relevant = {c for c in names if allowed is None or c in allowed}
+            relevant.update(c for c in cols if float(prev_w.get(c, 0) or 0) > 0)
             missing = [c for c in cols if pd.isna(row.get(c)) and pd.notna(close_row.get(c))]
             for c in missing:
                 row[c] = close_row[c]
-                used_close_fallback += 1
+                if c in relevant:
+                    used_close_fallback += 1
 
         avail = [c for c in names if c in cols and (allowed is None or c in allowed) and pd.notna(row.get(c))]
         stuck = []

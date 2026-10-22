@@ -21,7 +21,9 @@
 - {{ e.event_type }} {{ e.name }} {{ e.scheduled_shanghai }} 重要度{{ e.importance }}
 {% endfor %}
 
-## 候选前 20
+模式 {{ daily.source_mode or "unknown" }}；公式发布 {{ (daily.gate_artifact or {}).status or "unavailable" }} / {{ (daily.gate_artifact or {}).reason or "not_published" }}。
+
+## 正式候选前 20
 股票池 {{ daily.universe_size }}；缺数据 {{ "%.1f"|format((daily.missing_ratio or 0)*100) }}%。未过闸公式分不计入总分。候选前 10 以过闸公式为主。
 {% if (daily.merge_weights or {}).oos_unverified %}
 - 量化样本外未验证
@@ -33,7 +35,12 @@
 - 无候选
 {% endif %}
 
-## 公式回测闸门与基准
+## 研究观察（非正式候选）
+{% for c in (daily.observations or [])[:5] %}
+- {{ c.symbol }} {{ c.name }} 仅观察；{{ "公式已准入" if c.eligible else "未准入" }}
+{% endfor %}
+
+## 已发布公式验收与基准
 {% set pit = daily.pit_universe or {} %}
 股票池：{{ pit.label or "未标时点池" }}（{{ pit.kind or "unknown" }}）
 闸门：对照行是 T+1 开盘同池等权（不是月末收盘等权）。覆盖月数≥80% 后才看超额>0、Sharpe≥等权、半段都>0。今日静态名单已作废（前视）。
@@ -42,7 +49,7 @@
 {% endfor %}
 {% set q = daily.qlib or {} %}
 {% set mw = daily.merge_weights or {} %}
-qlib 默认 {{ q.kind or "未训练" }} RankIC={{ q.rank_ic if q.rank_ic is not none else "缺数据" }} RankICIR={{ q.rank_icir if q.rank_icir is not none else q.icir }}
+量化实际实现 {{ q.kind or "未训练" }} RankIC={{ q.rank_ic if q.rank_ic is not none else "缺数据" }} RankICIR={{ q.rank_icir if q.rank_icir is not none else q.icir }}
 量化权重 {{ mw.qlib_weight_effective }}（公式 {{ mw.formula_weight }}；量化仅排序辅助{% if mw.oos_unverified %}；量化样本外未验证{% endif %}）
 {% if mw.note %}
 - {{ mw.note }}
@@ -71,7 +78,7 @@ qlib 默认 {{ q.kind or "未训练" }} RankIC={{ q.rank_ic if q.rank_ic is not 
 - 无
 {% endif %}
 
-## 多空机会
+## 新闻研究观察（不等于正式候选）
 {% set nws = daily.news or {} %}
 {% for o in (nws.opportunities or [])[:10] %}
 - [{{ o.tier or "观察" }}] {{ o.direction or "" }} {{ o.symbol or "" }} {{ o.name or "" }} 理由：{{ o.entry_logic or o.risk or "缺数据" }}；失效：{{ o.invalidation or "缺数据" }}；时间止损：{{ o.time_stop_on or o.time_stop or "缺数据" }}；标题：{{ o.trigger_headline or "" }}；信源{{ o.source_grade or "?" }} {{ o.source_grade_label or "" }}
