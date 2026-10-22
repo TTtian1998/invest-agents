@@ -40,7 +40,8 @@ def build_review_pack(
     top = candidates[:judge_n]
     packed_rows = []
     for i, cand in enumerate(top, start=1):
-        row = by.get(cand.get("symbol"))
+        symbol = cand.get("symbol")
+        row = by.get(symbol) if symbol is not None else None
         if row is None:
             continue
         cards, conflicts = run_checklists(row, masters)
@@ -159,7 +160,6 @@ def result_from_parts(
     notes: list[str] | None = None,
 ) -> ReviewResult:
     return ReviewResult(
-        schema_name=RESULT_SCHEMA,
         asof=asof,
         backend=backend,
         extractions=extractions,

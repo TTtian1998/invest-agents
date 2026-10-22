@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from zhiku.ai.backend import LLMBackend
-from zhiku.ai.schema import CitedClaim, Judgment
+from zhiku.ai.schema import CitedClaim, Judgment, Stance
 from zhiku.review.checklists import run_checklists
 from zhiku.screens.fundamentals import Fundamentals
 
@@ -68,7 +68,7 @@ def judge_symbol(
     return Judgment(
         symbol=row.symbol,
         name=row.name,
-        stance=stance,
+        stance=cast(Stance, stance),
         confidence=raw.get("confidence") or 0.0,
         invalidation=str(raw.get("invalidation") or "缺数据"),
         time_stop_days=int(raw.get("time_stop_days") or 20),
