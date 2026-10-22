@@ -240,6 +240,7 @@ def run_browser(base: str, kb: Path, output: Path, result: dict[str, Any]) -> No
                 directory.mkdir()
 
                 def capture(state: str) -> None:
+                    page.evaluate("window.scrollTo(0, 0)")
                     page.screenshot(path=directory / f"{state}.png", full_page=True, animations="disabled")
                     scenario["screenshots"].append(f"{name}/{state}.png")
                     assert_no_overflow(page, f"{name}/{state}")
@@ -356,6 +357,7 @@ def run_browser(base: str, kb: Path, output: Path, result: dict[str, Any]) -> No
                 except Exception:
                     scenario["status"] = "failed"
                     scenario["failure"] = traceback.format_exc()
+                    page.evaluate("window.scrollTo(0, 0)")
                     page.screenshot(path=directory / "failure.png", full_page=True)
                     failures.append(f"{name}: {scenario['failure']}")
                 finally:
@@ -487,6 +489,7 @@ def run_pipeline_browser(base: str, output: Path, result: dict[str, Any]) -> Non
                                 expect(page.locator("#content")).to_contain_text("当前没有正式候选")
                         expect(page.locator("#page-title")).to_be_visible()
                         assert_no_overflow(page, f"pipeline/{name}/{shot}")
+                        page.evaluate("window.scrollTo(0, 0)")
                         page.screenshot(path=directory / f"{shot}.png", full_page=True, animations="disabled")
                         scenario["screenshots"].append(f"pipeline/{name}/{shot}.png")
                         if route == "validation":
@@ -494,6 +497,7 @@ def run_pipeline_browser(base: str, output: Path, result: dict[str, Any]) -> Non
                             page.get_by_text("查看快照标识与验收元数据", exact=True).click()
                             expect(page.locator("#content details.disclosure")).to_have_attribute("open", "")
                             assert_no_overflow(page, f"pipeline/{name}/05b-validation-metadata")
+                            page.evaluate("window.scrollTo(0, 0)")
                             page.screenshot(path=directory / "05b-validation-metadata.png", full_page=True, animations="disabled")
                             scenario["screenshots"].append(f"pipeline/{name}/05b-validation-metadata.png")
                             page.get_by_text("查看快照标识与验收元数据", exact=True).click()
@@ -505,6 +509,7 @@ def run_pipeline_browser(base: str, output: Path, result: dict[str, Any]) -> Non
                     scenario["status"] = "failed"
                     scenario["failure"] = traceback.format_exc()
                     failures.append(scenario["failure"])
+                    page.evaluate("window.scrollTo(0, 0)")
                     page.screenshot(path=directory / "failure.png", full_page=True)
                 finally:
                     scenario["console_errors"] = errors
