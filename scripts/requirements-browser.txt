@@ -1,0 +1,2 @@
+# Official PyPI package. Keep the browser revision paired with this exact version.
+playwright==1.62.0

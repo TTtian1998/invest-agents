@@ -99,10 +99,11 @@ def main(
         raise typer.BadParameter(str(exc)) from exc
     from zhiku.pipeline.sources import claim_source_mode
     from zhiku.calendar import calendar_network
-    try:
-        claim_source_mode(paths.kb, mode)
-    except (ValueError, OSError) as exc:
-        _die(str(exc))
+    if ctx.invoked_subcommand != "ui":
+        try:
+            claim_source_mode(paths.kb, mode)
+        except (ValueError, OSError) as exc:
+            _die(str(exc))
     ctx.with_resource(calendar_network(enabled=mode == "live"))
     ctx.obj["provider_kind"] = "fixture" if mode == "demo" else mode
     ctx.obj["provider"] = None
@@ -522,30 +523,43 @@ def run_daily_cmd(
 
 @app.command("ui")
 def ui_cmd(
-    port: int = typer.Option(8501, "--port"),
+    ctx: typer.Context,
+    port: int = typer.Option(8501, "--port", min=1, max=65535),
+    host: str = typer.Option("127.0.0.1", "--host", help="默认仅本机访问；此服务不提供身份认证"),
+    allow_host: Optional[list[str]] = typer.Option(None, "--allow-host", help="显式允许反向代理 Host，可重复"),
+    legacy: bool = typer.Option(False, "--legacy", help="启动旧版 Streamlit 看板"),
 ) -> None:
-    """启动本地 Streamlit 看板。"""
-    import subprocess
+    """启动只读投研工作台，不采集、不训练、不调用 AI、不写报告。"""
     import sys
-    from pathlib import Path as P
 
+    paths: Paths = ctx.obj["paths"]
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        typer.echo("警告：工作台无身份认证，不应直接暴露到公网；请配置受保护的反向代理。", err=True)
+    if legacy:
+        import subprocess
+        try:
+            import streamlit  # noqa: F401
+        except ImportError:
+            _die('未安装旧版看板依赖。请执行：uv pip install -e ".[legacy-ui]"')
+        app_path = Path(__file__).resolve().parent / "app" / "streamlit_app.py"
+        env = {**os.environ, "ZHIKU_KB": str(paths.kb), "ZHIKU_FIXTURES": str(paths.fixtures)}
+        cmd = [sys.executable, "-m", "streamlit", "run", str(app_path),
+               "--server.port", str(port), "--server.address", host, "--server.headless", "true"]
+        raise typer.Exit(subprocess.call(cmd, env=env))
     try:
-        import streamlit  # noqa: F401
+        import uvicorn
+        from zhiku.app.workspace import create_app
     except ImportError:
-        _die('未安装看板 extra。请执行：uv pip install -e ".[ui]"')
-    app_path = P(__file__).resolve().parent / "app" / "streamlit_app.py"
-    cmd = [
-        sys.executable,
-        "-m",
-        "streamlit",
-        "run",
-        str(app_path),
-        "--server.port",
-        str(port),
-        "--server.headless",
-        "true",
-    ]
-    raise typer.Exit(subprocess.call(cmd))
+        _die('未安装 Web 工作台依赖。请执行：uv pip install -e ".[ui]"；旧版使用 zk ui --legacy')
+    hosts = ["localhost", "127.0.0.1", "[::1]"]
+    for value in allow_host or []:
+        if not value or any(char in value for char in "/*:@ "):
+            raise typer.BadParameter("--allow-host 仅接受明确的主机名，不接受通配符、协议或端口")
+        hosts.append(value)
+    if host not in {"0.0.0.0", "::", "::1"}:
+        hosts.append(host)
+    typer.echo(f"只读投研工作台：http://{host}:{port}（报告来源以页面标记为准）")
+    uvicorn.run(create_app(paths, allowed_hosts=hosts), host=host, port=port, proxy_headers=False)
 
 
 @factor_app.command("prepare")

@@ -1,0 +1,20 @@
+# No public host binding, no broker/LLM credentials. Mount a generated KB read-only.
+services:
+  workspace:
+    build:
+      context: .
+      dockerfile: Dockerfile.workspace
+    ports:
+      - "127.0.0.1:8501:8501"
+    environment:
+      ZHIKU_KB: /data
+    volumes:
+      - "${ZHIKU_WORKSPACE_KB:?Set an absolute generated KB path}:/data:ro"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped

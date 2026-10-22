@@ -4,9 +4,21 @@
 
 不接任何券商、不下单、不发消息（提醒通道需显式配置且默认跳过）。输出只有本地 markdown / HTML / JSON 和 stdout。
 
-## 产品截图 / Screenshots
+## 新版只读投研工作台
 
-以下看板截图来自仓库内离线 demo（`bash examples/run_demo.sh` 后 `zk ui`）。**全部是虚构示例数据**：标的只有 510300、600519、AAPL、0700.HK、2800.HK、000333 等示例代码，页面上的价位、财务、新闻和宏观数字都是编造的。不含真实持仓、数量、成本、账户或个人信息。
+`zk ui` 启动新版 Web 工作台：今日概览、候选与观察、消息与证据、研究验证。正式候选与公式研究观察分视图显示，支持搜索/市场筛选/排序、历史快照、标的证据与安全导出。默认只监听本机，页面不采集、不训练、不调用 AI、不交易。
+
+```bash
+pip install -e '.[dev,ui]'
+bash scripts/run_workspace_demo.sh
+# http://127.0.0.1:8501，独立临时知识库、全部虚构演示
+```
+
+运行、架构、安全边界、设计参考和云端浏览器验证见 [工作台指南](docs/WORKSPACE.md)。GitHub Actions 的浏览器 QA 提供桌面/手机截图与实际交互证据；不是公开生产部署。
+
+## 旧版产品截图 / Legacy screenshots
+
+以下看板截图来自仓库内离线 demo（`bash examples/run_demo.sh` 后 `zk ui --legacy`）。**全部是虚构示例数据**：标的只有 510300、600519、AAPL、0700.HK、2800.HK、000333 等示例代码，页面上的价位、财务、新闻和宏观数字都是编造的。不含真实持仓、数量、成本、账户或个人信息。
 
 同一次 demo 产出的完整日报：[docs/sample_daily_report.md](docs/sample_daily_report.md)。
 
@@ -139,7 +151,7 @@ zk --provider live daily --date 2026-10-22
 | `zk close` | 收盘确认；事件窗口提示新开仓降仓位 |
 | `zk exposure` | 成长仓闸门（0.60/0.50 滞回）+ 禁加 |
 | `zk review --week` | 触发线命中率 + 事件剧本兑现 + 信源跟踪 |
-| `zk ui` | 本地看板（需 `[ui]`），含「宏观与事件」 |
+| `zk ui` | 新版只读投研工作台（需 `[ui]`）；旧版使用 `zk ui --legacy` |
 | `zk debate 600519` | 可选 TradingAgents |
 | `zk export-review --date DATE` | 只导出已保存证据快照，不重跑 daily |
 | `zk ingest-review path.json` | 精确匹配 snapshot_id/asof，记录并更新相同快照日报 |
@@ -194,7 +206,8 @@ zk --provider live daily --date 2026-10-22
 ## 可选 extra
 
 ```bash
-uv pip install -e ".[ui]"        # Streamlit 看板
+uv pip install -e ".[ui]"        # 新版只读 Web 工作台
+uv pip install -e ".[legacy-ui]" # 可选旧版 Streamlit
 uv pip install -e ".[qlib]"      # Alpha158 + LightGBM，未装则公式分
 uv pip install -e ".[backtest]"  # vectorbt，未装则纯 pandas
 uv pip install -e ".[masters]"   # openai 大师审核
