@@ -27,6 +27,7 @@ from zhiku.factors.dataset import (
     load_flow_features,
     load_fund_features,
     load_price_features,
+    load_revision_features,
     make_ch_features,
     make_labels,
     neutralize,
@@ -64,6 +65,7 @@ class ExperimentResult:
     kept: bool = False
     notes: list[str] = field(default_factory=list)
     changed: list[str] = field(default_factory=list)
+    folds: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -96,6 +98,7 @@ class _PoolCache:
         self.ch: dict[str, pd.DataFrame] = {}
         self.flow: dict[str, pd.DataFrame] = {}
         self.fund: dict[str, pd.DataFrame] = {}
+        self.revision: dict[str, pd.DataFrame] = {}
         self.labels: dict[tuple[str, str], pd.Series] = {}
         self.econ: dict[str, pd.Series] = {}
         self.bars: dict[str, pd.DataFrame] = {}
@@ -154,6 +157,14 @@ class _PoolCache:
                     cal = cal[cal.isin(set(cal.to_series().groupby(cal.to_period("M")).max()))]
                 self.fund[key] = add_ch_ep(load_fund_features(store, syms, cal))
             parts.append(self.fund[key])
+        if "revision" in cfg.features:
+            if key not in self.revision:
+                cal = self.px[key].index.get_level_values("date").unique()
+                if cfg.freq == "month":
+                    cal = pd.DatetimeIndex(cal)
+                    cal = cal[cal.isin(set(cal.to_series().groupby(cal.to_period("M")).max()))]
+                self.revision[key] = load_revision_features(store, syms, cal)
+            parts.append(self.revision[key])
         if not parts:
             return self.px[key]
         return pd.concat(parts, axis=1)
@@ -164,7 +175,14 @@ class _PoolCache:
         lk = (key, cfg.label)
         if lk not in self.labels:
             bars = self._bars(store, key, self.train_syms(store, cfg, asof))
-            self.labels[lk] = make_labels(bars, kind=cfg.label, membership=membership)
+            industry = None
+            if cfg.label == "t20_open_ind_xs":
+                raw = label_open_horizon(bars, 20)
+                if not raw.empty:
+                    industry, _ = attach_industry_size(raw.index, store)
+            self.labels[lk] = make_labels(
+                bars, kind=cfg.label, membership=membership, industry=industry
+            )
         return self.labels[lk]
 
     def economic(self, store: MarketStore, cfg: ExperimentConfig, asof: date) -> pd.Series:
@@ -296,6 +314,65 @@ def _metrics(pred: pd.Series, label: pd.Series, dates: pd.Series) -> dict[str, A
     out["quintiles"] = q
     out["q5_q1"] = q.get("Q5_minus_Q1")
     return out
+
+
+# 测试集之前的 walk-forward 折。改日期等于换折，锁定后不得再动。
+WF_FOLDS: tuple[tuple[str, date, date], ...] = (
+    ("2024H1", date(2023, 11, 1), date(2024, 4, 30)),
+    ("2024H2", date(2024, 5, 1), date(2024, 10, 31)),
+    ("2025H1", date(2024, 11, 1), date(2025, 4, 30)),
+    ("2025H2", date(2025, 5, 1), date(2025, 10, 31)),
+)
+
+
+def walk_forward_fold_metrics(
+    pred: pd.Series,
+    label: pd.Series,
+    *,
+    folds: tuple[tuple[str, date, date], ...] = WF_FOLDS,
+    econ: pd.Series | None = None,
+) -> dict[str, Any]:
+    """各折 RankIC。折结束日必须 < TEST_START。"""
+    rows: list[dict[str, Any]] = []
+    for name, start, end in folds:
+        if end >= TEST_START:
+            raise ValueError(f"walk-forward 折 {name} 结束 {end} 碰到测试集")
+        mask = (pd.DatetimeIndex(pred.index.get_level_values("date")) >= pd.Timestamp(start)) & (
+            pd.DatetimeIndex(pred.index.get_level_values("date")) <= pd.Timestamp(end)
+        )
+        part = pred.loc[mask].dropna()
+        if part.empty:
+            rows.append({"fold": name, "start": start.isoformat(), "end": end.isoformat(), "n": 0})
+            continue
+        y = label.reindex(part.index)
+        payload = _eval_split(part, y, econ.reindex(part.index) if econ is not None else None)
+        own = payload.get("own_label") or {}
+        xs = payload.get("t20_xs") or {}
+        rows.append(
+            {
+                "fold": name,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "n": int(len(part)),
+                "rank_ic": own.get("rank_ic"),
+                "rank_icir": own.get("rank_icir"),
+                "q5_q1": own.get("q5_q1"),
+                "t20_xs": xs,
+                "t20_rank_ic": xs.get("rank_ic"),
+                "t20_rank_icir": xs.get("rank_icir"),
+            }
+        )
+    ics = [float(r["rank_ic"]) for r in rows if r.get("rank_ic") is not None]
+    dist = {
+        "n_folds": len(rows),
+        "n_with_ic": len(ics),
+        "mean": float(np.mean(ics)) if ics else None,
+        "std": float(np.std(ics, ddof=0)) if len(ics) >= 2 else None,
+        "min": float(min(ics)) if ics else None,
+        "max": float(max(ics)) if ics else None,
+        "n_positive": int(sum(1 for x in ics if x > 0)),
+    }
+    return {"folds": rows, "distribution": dist}
 
 
 def _eval_split(pred: pd.Series, label: pd.Series, econ: pd.Series | None) -> dict[str, Any]:
@@ -454,6 +531,7 @@ def run_one(
     report_splits: tuple[str, ...] = ("valid",),
     cache: _PoolCache | None = None,
     parent: ExperimentConfig | None = None,
+    with_folds: bool = False,
 ) -> tuple[ExperimentResult, pd.Series, Any]:
     data, _industry, _size, membership = build_frame(store, cfg, asof=asof, cache=cache)
     result = ExperimentResult(name=cfg.name, notes=[cfg.notes] if cfg.notes else [])
@@ -476,6 +554,9 @@ def run_one(
         setattr(result, split, metrics)
         setattr(result, f"n_{split}", int(len(p)))
     result.n_train = int((data["split"] == "train").sum())
+    if with_folds and not pred.empty:
+        fold_label = data["label"].reindex(pred.index)
+        result.folds = walk_forward_fold_metrics(pred, fold_label, econ=econ)
     window_start, window_end = None, None
     if "test" in report_splits:
         window_start, window_end = TEST_START, asof
@@ -526,6 +607,41 @@ CANDIDATES = [
         freq="month",
         versus="freq_month",
         notes="相对月末对照改样本：全 A 训练，中证800 内评估（全 A 日度做不到，必须月末）",
+    ),
+]
+
+LOCKED_ZSCORE = ExperimentConfig(
+    name="model_zscore",
+    model="zscore",
+    notes="第一轮锁定：截面 z-score 等权（线性）",
+)
+
+# 第三轮：相对锁定 z-score 只改标签为 T+20 行业中性超额，并报告测试集前多折 RankIC。
+ROUND3 = [
+    ExperimentConfig(
+        "zscore_t20_ind_xs",
+        model="zscore",
+        label="t20_open_ind_xs",
+        versus="model_zscore",
+        notes="相对锁定 z-score 只改标签：T+1开→T+20收 行业中性超额；walk-forward 多折验证",
+    ),
+]
+
+# 第二轮：相对锁定 z-score 每次只改一个变量。测试集另目录、只看一次。
+ROUND2 = [
+    ExperimentConfig(
+        "zscore_neut_ind_size",
+        model="zscore",
+        neutralize=True,
+        versus="model_zscore",
+        notes="相对锁定 z-score 只改中性化：行业均值 + 对数规模残差",
+    ),
+    ExperimentConfig(
+        "zscore_feat_revision",
+        model="zscore",
+        features=("px", "revision"),
+        versus="model_zscore",
+        notes="相对锁定 z-score 只改特征：业绩预告修正（baostock 公告日）",
     ),
 ]
 
@@ -834,6 +950,272 @@ def run_ablation(
         "pred": pred,
         "rows": rows,
     }
+
+
+def run_round2(
+    store: MarketStore,
+    *,
+    asof: date,
+    out_dir: Path | None = None,
+    models_dir: Path | None = None,
+    peek_test: bool = True,
+) -> dict[str, Any]:
+    """相对锁定 z-score 的单变量第二轮。新目录；测试集只看一次；不重看第一轮测试集。"""
+    cache = _PoolCache()
+    rows: list[ExperimentResult] = []
+    out = Path(out_dir) if out_dir else None
+    print(f"[experiment-round2] start {LOCKED_ZSCORE.name}", flush=True)
+    parent_res, _, _ = run_one(
+        store, LOCKED_ZSCORE, asof=asof, report_splits=("valid",), cache=cache
+    )
+    parent_res.kept = True
+    rows.append(parent_res)
+    if out:
+        _write_log(out, rows)
+    kept_cfgs: list[ExperimentConfig] = []
+    by_name = {LOCKED_ZSCORE.name: parent_res}
+    for cfg in ROUND2:
+        print(f"[experiment-round2] start {cfg.name} vs {LOCKED_ZSCORE.name}", flush=True)
+        res, _, _ = run_one(
+            store, cfg, asof=asof, report_splits=("valid",), cache=cache, parent=LOCKED_ZSCORE
+        )
+        res.kept = decide_keep(parent_res, res)
+        xs = ((res.valid or {}).get("t20_xs") or {})
+        print(
+            f"[experiment-round2] done {cfg.name} keep={res.kept} "
+            f"RankIC={xs.get('rank_ic')} RankICIR={xs.get('rank_icir')}",
+            flush=True,
+        )
+        if res.kept:
+            kept_cfgs.append(cfg)
+        by_name[cfg.name] = res
+        rows.append(res)
+        if out:
+            _write_log(out, rows)
+
+    locked = LOCKED_ZSCORE
+    if kept_cfgs:
+        best = max(
+            [by_name[c.name] for c in kept_cfgs],
+            key=lambda r: float(((r.valid or {}).get("t20_xs") or {}).get("rank_icir") or -999),
+        )
+        locked = next((c for c in ROUND2 if c.name == best.name), LOCKED_ZSCORE)
+
+    test_payload = None
+    if peek_test:
+        test_rows = []
+        seen: set[str] = set()
+        for cfg in (LOCKED_ZSCORE, locked):
+            if cfg.name in seen:
+                continue
+            seen.add(cfg.name)
+            print(f"[experiment-round2] test-once {cfg.name}", flush=True)
+            tres, _, _ = run_one(
+                store, cfg, asof=asof, report_splits=("test",), cache=cache, parent=LOCKED_ZSCORE
+            )
+            test_rows.append(tres.to_dict())
+        test_payload = {
+            "looks": 1,
+            "note": "第二轮验证结束后才计算；不回写去留；不重看第一轮测试集",
+            "results": test_rows,
+        }
+        if out:
+            _write_log(out, rows, extra={"test_looks": 1, "test": test_payload})
+
+    if models_dir is not None and locked.name != LOCKED_ZSCORE.name:
+        lock_recipe(locked, Path(models_dir))
+
+    payload = {
+        "asof": asof.isoformat(),
+        "round": 2,
+        "parent": LOCKED_ZSCORE.name,
+        "split": {
+            "train_end": TRAIN_END.isoformat(),
+            "valid": f"{VALID_START}–{VALID_END}",
+            "test_start": TEST_START.isoformat(),
+            "rule": "相对锁定 z-score 每次只改一个变量；验证集决定去留；测试集只看一次",
+        },
+        "n_experiments": len(rows),
+        "test_looks": 1 if test_payload else 0,
+        "results": [r.to_dict() for r in rows],
+        "kept": [r.name for r in rows if r.kept and r.name != LOCKED_ZSCORE.name],
+        "locked": locked.name,
+        "test": test_payload,
+    }
+    if out is not None:
+        (out / "ablation.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"payload": payload, "locked": locked, "rows": rows}
+
+
+def run_round3(
+    store: MarketStore,
+    *,
+    asof: date,
+    out_dir: Path | None = None,
+    models_dir: Path | None = None,
+    peek_test: bool = True,
+) -> dict[str, Any]:
+    """T+20 行业中性超额 + walk-forward 多折。新目录；测试集只看一次；不重看前两轮测试集。"""
+    cache = _PoolCache()
+    rows: list[ExperimentResult] = []
+    out = Path(out_dir) if out_dir else None
+    print(f"[experiment-round3] start {LOCKED_ZSCORE.name} folds", flush=True)
+    parent_res, _, _ = run_one(
+        store, LOCKED_ZSCORE, asof=asof, report_splits=("valid",), cache=cache, with_folds=True
+    )
+    parent_res.kept = True
+    rows.append(parent_res)
+    if out:
+        _write_log(out, rows)
+    kept_cfgs: list[ExperimentConfig] = []
+    by_name = {LOCKED_ZSCORE.name: parent_res}
+    for cfg in ROUND3:
+        print(f"[experiment-round3] start {cfg.name} vs {LOCKED_ZSCORE.name}", flush=True)
+        res, _, _ = run_one(
+            store,
+            cfg,
+            asof=asof,
+            report_splits=("valid",),
+            cache=cache,
+            parent=LOCKED_ZSCORE,
+            with_folds=True,
+        )
+        res.kept = decide_keep(parent_res, res)
+        xs = ((res.valid or {}).get("t20_xs") or {})
+        dist = (res.folds or {}).get("distribution") or {}
+        print(
+            f"[experiment-round3] done {cfg.name} keep={res.kept} "
+            f"valid RankIC={xs.get('rank_ic')} fold_mean={dist.get('mean')}",
+            flush=True,
+        )
+        if res.kept:
+            kept_cfgs.append(cfg)
+        by_name[cfg.name] = res
+        rows.append(res)
+        if out:
+            _write_log(out, rows)
+
+    locked = LOCKED_ZSCORE
+    if kept_cfgs:
+        best = max(
+            [by_name[c.name] for c in kept_cfgs],
+            key=lambda r: float(((r.valid or {}).get("t20_xs") or {}).get("rank_icir") or -999),
+        )
+        locked = next((c for c in ROUND3 if c.name == best.name), LOCKED_ZSCORE)
+
+    test_payload = None
+    if peek_test and locked.name != LOCKED_ZSCORE.name:
+        test_rows = []
+        print(f"[experiment-round3] test-once {locked.name}", flush=True)
+        tres, _, _ = run_one(
+            store, locked, asof=asof, report_splits=("test",), cache=cache, parent=LOCKED_ZSCORE
+        )
+        test_rows.append(tres.to_dict())
+        test_payload = {
+            "looks": 1,
+            "note": "第三轮验证结束后才计算；不回写去留；不重看前两轮测试集",
+            "results": test_rows,
+        }
+        if out:
+            _write_log(out, rows, extra={"test_looks": 1, "test": test_payload})
+    elif peek_test:
+        test_payload = {
+            "looks": 0,
+            "note": "未保留新标签配方，测试集未看。锁定 z-score 测试集已在第二轮看过（RankIC −0.053）。",
+            "results": [],
+        }
+
+    if models_dir is not None and locked.name != LOCKED_ZSCORE.name:
+        lock_recipe(locked, Path(models_dir))
+
+    payload = {
+        "asof": asof.isoformat(),
+        "round": 3,
+        "parent": LOCKED_ZSCORE.name,
+        "split": {
+            "train_end": TRAIN_END.isoformat(),
+            "valid": f"{VALID_START}–{VALID_END}",
+            "test_start": TEST_START.isoformat(),
+            "folds": [f"{n} {a}–{b}" for n, a, b in WF_FOLDS],
+            "rule": "相对锁定 z-score 只改标签为 T+20 行业中性超额；验证集+多折决定去留；测试集只看一次",
+        },
+        "n_experiments": len(rows),
+        "test_looks": (test_payload or {}).get("looks") or 0,
+        "results": [r.to_dict() for r in rows],
+        "kept": [r.name for r in rows if r.kept and r.name != LOCKED_ZSCORE.name],
+        "locked": locked.name,
+        "test": test_payload,
+        "fold_tables": {r.name: r.folds for r in rows},
+    }
+    if out is not None:
+        (out / "ablation.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        _write_fold_md(out, rows)
+        _write_round3_report(out, payload, rows)
+    return {"payload": payload, "locked": locked, "rows": rows}
+
+
+def _write_round3_report(out_dir: Path, payload: dict[str, Any], rows: list[ExperimentResult]) -> None:
+    lines = [
+        "# 量化第三轮：T+20 行业中性超额 + walk-forward",
+        "",
+        "新目录。相对锁定 z-score 只改标签。验证集 + 测试集前多折决定去留；测试集只看一次，不重看前两轮。",
+        "",
+        f"分割：train≤{TRAIN_END} / valid {VALID_START}–{VALID_END} / test≥{TEST_START}",
+        f"折：{', '.join(payload.get('split', {}).get('folds') or [])}",
+        f"锁：{payload.get('locked')}；保留：{', '.join(payload.get('kept') or []) or '无'}；测试集查看 {payload.get('test_looks')} 次。",
+        "",
+        "## 验证集",
+        "",
+        "| 实验 | RankIC | RankICIR | 折均值 RankIC | 正折 | 保留 |",
+        "| --- | ---: | ---: | ---: | ---: | --- |",
+    ]
+    for res in rows:
+        xs = (res.valid or {}).get("t20_xs") or {}
+        dist = (res.folds or {}).get("distribution") or {}
+        lines.append(
+            f"| {res.name} | {_fmt(xs.get('rank_ic'))} | {_fmt(xs.get('rank_icir'))} | "
+            f"{_fmt(dist.get('mean'))} | {dist.get('n_positive')}/{dist.get('n_with_ic')} | "
+            f"{'是' if res.kept and res.name != LOCKED_ZSCORE.name else ('对照' if res.name == LOCKED_ZSCORE.name else '否')} |"
+        )
+    test = payload.get("test") or {}
+    lines += ["", "## 测试集", "", test.get("note") or "未看", ""]
+    for raw in test.get("results") or []:
+        xs = ((raw.get("test") or {}).get("t20_xs") or {})
+        lines.append(f"- {raw.get('name')} RankIC={_fmt(xs.get('rank_ic'))} RankICIR={_fmt(xs.get('rank_icir'))}")
+    lines += ["", "不含持仓。", ""]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "REPORT.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_fold_md(out_dir: Path, rows: list[ExperimentResult]) -> None:
+    lines = [
+        "# Walk-forward 各折 RankIC",
+        "",
+        "折结束日均 < 测试集起点。z-score 预测与训练标签无关；`zscore_t20_ind_xs` 的 own_label 是行业中性超额。",
+        "",
+    ]
+    for res in rows:
+        folds = (res.folds or {}).get("folds") or []
+        dist = (res.folds or {}).get("distribution") or {}
+        lines.append(f"## {res.name}")
+        lines.append("")
+        lines.append(
+            f"分布：mean={_fmt(dist.get('mean'))} std={_fmt(dist.get('std'))} "
+            f"min={_fmt(dist.get('min'))} max={_fmt(dist.get('max'))} "
+            f"正折 {dist.get('n_positive')}/{dist.get('n_with_ic')}"
+        )
+        lines.append("")
+        lines.append("| 折 | 起 | 止 | n | 本标签 RankIC | 本标签 IR | T+20同池 RankIC | T+20同池 IR |")
+        lines.append("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |")
+        for f in folds:
+            lines.append(
+                f"| {f.get('fold')} | {f.get('start')} | {f.get('end')} | {f.get('n', 0)} | "
+                f"{_fmt(f.get('rank_ic'))} | {_fmt(f.get('rank_icir'))} | "
+                f"{_fmt(f.get('t20_rank_ic'))} | {_fmt(f.get('t20_rank_icir'))} |"
+            )
+        lines.append("")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "folds.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def main() -> None:

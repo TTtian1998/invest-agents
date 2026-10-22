@@ -49,11 +49,20 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "total_assets": ("资产总计", "Total Assets", "TOTAL_ASSETS"),
     "total_liab": ("负债合计", "Total Liab", "TOTAL_LIABILITIES", "负债总计"),
     "equity": ("股东权益合计", "Stockholders Equity", "TOTAL_EQUITY", "所有者权益合计"),
-    "shares": ("实收资本(或股本)", "Ordinary Shares Number", "SHARE_CAPITAL", "股本"),
     "inventory": ("存货", "Inventory", "INVENTORY"),
     "receivables": ("应收账款", "Net Receivables", "ACCOUNTS_RECE"),
-    "eps": ("每股收益", "EPS", "basicEPS"),
-    "bps": ("每股净资产", "Book Value Per Share", "BVPS"),
+    "eps": (
+        "每股收益",
+        "基本每股收益",
+        "EPS",
+        "basicEPS",
+        "epsTTM",
+        "BASIC_EPS",
+        "每股收益-基本每股收益",
+    ),
+    "bps": ("每股净资产", "Book Value Per Share", "BVPS", "BPS", "bvps"),
+    "shares": ("实收资本(或股本)", "Ordinary Shares Number", "SHARE_CAPITAL", "股本", "总股本"),
+    "rd": ("研发费用", "研发支出", "Research And Development", "R&D"),
     "roe_pct": ("净资产收益率", "ROE"),
     "debt_asset_pct": ("资产负债率",),
 }
@@ -116,6 +125,36 @@ def nwc_of(balance: dict[str, Any] | None) -> float | None:
 
 def nfa_of(balance: dict[str, Any] | None) -> float | None:
     return pick_num(balance, "fixed_assets")
+
+
+def ncav_of(balance: dict[str, Any] | None) -> float | None:
+    """格雷厄姆 NCAV：流动资产 − 全部负债。缺一项则 None。"""
+    ca = pick_num(balance, "current_assets")
+    tl = pick_num(balance, "total_liab")
+    if ca is None or tl is None:
+        return None
+    return ca - tl
+
+
+def _closes_asof(closes: pd.Series | None, asof=None) -> pd.Series | None:
+    if closes is None or getattr(closes, "empty", True):
+        return None
+    s = closes.dropna().astype(float).sort_index()
+    if asof is not None and len(s) > 0:
+        s = s.loc[: pd.Timestamp(asof)]
+    return None if s.empty else s
+
+
+def dist_to_high(closes: pd.Series | None, window: int = 252, *, asof=None) -> float | None:
+    """距窗口最高收盘的距离。只用 asof（含）之前的收盘；asof 缺省则用整列。"""
+    s = _closes_asof(closes, asof)
+    if s is None or len(s) < 20:
+        return None
+    peak = float(s.iloc[-window:].max()) if len(s) >= 2 else None
+    last = float(s.iloc[-1])
+    if peak is None or peak <= 0:
+        return None
+    return last / peak - 1.0
 
 
 def interest_bearing(balance: dict[str, Any] | None) -> float | None:
@@ -226,9 +265,10 @@ def consecutive_div_years(ex_dates: list[date], asof: date) -> int | None:
     return n
 
 
-def momentum_12_1(closes: pd.Series) -> float | None:
-    s = closes.dropna().astype(float).sort_index()
-    if len(s) < 252:
+def momentum_12_1(closes: pd.Series, *, asof=None) -> float | None:
+    """12−1 动量：收盘[-22]/收盘[-252]−1。只用 asof（含）之前的收盘。"""
+    s = _closes_asof(closes, asof)
+    if s is None or len(s) < 252:
         return None
     m1 = float(s.iloc[-22]) if len(s) >= 22 else None
     m12 = float(s.iloc[-252])
@@ -357,8 +397,24 @@ def snapshot_from_store(
     ebit = ebit_of(income)
     nwc = nwc_of(balance)
     nfa = nfa_of(balance)
+    ncav = ncav_of(balance)
+    prev_ni = pick_num(prev_income, "net_income")
+    eps_g = ratio(ni - prev_ni, abs(prev_ni)) if ni is not None and prev_ni not in (None, 0) else None
+    rev = pick_num(income, "revenue")
+    rd = pick_num(income, "rd")
+    rd_sales = ratio(rd, rev)
     eps = pick_num(income, "eps")
-    bps = pick_num(income, "bps")
+    bps = pick_num(income, "bps") or pick_num(balance, "bps")
+    shares = pick_num(balance, "shares") or pick_num(income, "shares")
+    if shares is not None and shares <= 0:
+        shares = None
+    # 面值约 1 元时，实收资本≈股数；只用已公告科目，不借今日 spot
+    if eps is None and ni is not None and shares:
+        eps = ni / shares
+    if bps is None and equity is not None and shares:
+        bps = equity / shares
+    if mktcap is None and shares is not None and last_close is not None:
+        mktcap = shares * last_close
     if mktcap is None and equity is not None and bps is not None and bps != 0 and last_close is not None:
         mktcap = (equity / bps) * last_close
     if pe is None and last_close is not None and eps is not None and eps != 0:
@@ -409,6 +465,10 @@ def snapshot_from_store(
         asset_turnover_prev=ato_prev,
         momentum_12_1=mom,
         volatility=vol,
+        ncav=ncav,
+        eps_growth=eps_g,
+        rd_to_sales=rd_sales,
+        dist_to_high=dist_to_high(closes),
     )
 
 

@@ -22,7 +22,10 @@
 {% endfor %}
 
 ## 候选前 20
-股票池 {{ daily.universe_size }}；缺数据 {{ "%.1f"|format((daily.missing_ratio or 0)*100) }}%。未过闸公式分不计入总分。
+股票池 {{ daily.universe_size }}；缺数据 {{ "%.1f"|format((daily.missing_ratio or 0)*100) }}%。未过闸公式分不计入总分。候选前 10 以过闸公式为主。
+{% if (daily.merge_weights or {}).oos_unverified %}
+- 量化样本外未验证
+{% endif %}
 {% for c in (daily.candidates or [])[:20] %}
 - {{ c.symbol }} {{ c.name }} 总分 {{ "%.1f"|format(c.total or 0) }}（过闸公式 {{ "%.1f"|format(c.formula_score or 0) }} / 量化 {{ "%.1f"|format(c.qlib_score or 0) }}）{{ (c.screens or {})|join(",") }}
 {% endfor %}
@@ -33,20 +36,40 @@
 ## 公式回测闸门与基准
 {% set pit = daily.pit_universe or {} %}
 股票池：{{ pit.label or "未标时点池" }}（{{ pit.kind or "unknown" }}）
-闸门：对同池等权超额必须 > 0，且 Sharpe 不低于等权。
+闸门：对照行是 T+1 开盘同池等权（不是月末收盘等权）。覆盖月数≥80% 后才看超额>0、Sharpe≥等权、半段都>0。今日静态名单已作废（前视）。
 {% for name, bt in (daily.backtests or {}).items() %}
-- {{ name }} 年化={{ bt.annualized }} 回撤={{ bt.max_drawdown }} Sharpe={{ bt.sharpe }} 对同池超额={{ bt.excess_annualized }} {{ "过闸" if bt.passed_gate else "对照/未过闸" }}
+- {{ name }} 年化={{ bt.annualized }} 回撤={{ bt.max_drawdown }} Sharpe={{ bt.sharpe }} 对同池超额={{ bt.excess_annualized }} 覆盖={{ bt.coverage_ratio }} {{ bt.gate_status or ("过闸" if bt.passed_gate else "对照/未过闸") }}
 {% endfor %}
 {% set q = daily.qlib or {} %}
 {% set mw = daily.merge_weights or {} %}
 qlib 默认 {{ q.kind or "未训练" }} RankIC={{ q.rank_ic if q.rank_ic is not none else "缺数据" }} RankICIR={{ q.rank_icir if q.rank_icir is not none else q.icir }}
-量化权重 {{ mw.qlib_weight_base }} × {{ mw.qlib_weight_scale }} = {{ mw.qlib_weight_effective }}（阈值 {{ mw.icir_threshold }}）
+量化权重 {{ mw.qlib_weight_effective }}（公式 {{ mw.formula_weight }}；量化仅排序辅助{% if mw.oos_unverified %}；量化样本外未验证{% endif %}）
+{% if mw.note %}
+- {{ mw.note }}
+{% endif %}
 {% set cmp = q.comparison or {} %}
 {% for mk, mm in cmp.items() %}
 {% if mk in ["lgb_lite", "qlib_alpha158"] and mm %}
 - {{ mk }} RankIC={{ mm.rank_ic }} RankICIR={{ mm.rank_icir or mm.icir }} 五分位={{ mm.quintiles }}
 {% endif %}
 {% endfor %}
+
+## AI 研判
+{% set ai = daily.ai_layer if daily.ai_layer is defined and daily.ai_layer else {} %}
+{% if daily.review_pack %}
+- 任务包：{{ daily.review_pack }}
+{% endif %}
+{% if ai.regime %}
+- 状态：{{ ai.regime.style }} / {{ ai.regime.value_or_growth }}；建议 {{ (ai.regime.prefer_screens or []) | join("、") or "缺数据" }}
+{% endif %}
+{% for j in (ai.judgments or [])[:10] %}
+- {{ j.symbol }} {{ j.stance }} {{ j.confidence }}；失效 {{ j.invalidation }}；止损 {{ j.time_stop_days }}日
+{% endfor %}
+{% if not ai.judgments and daily.review_pack %}
+- 待 zk ingest-review
+{% elif not ai.judgments and not daily.review_pack %}
+- 无
+{% endif %}
 
 ## 多空机会
 {% set nws = daily.news or {} %}

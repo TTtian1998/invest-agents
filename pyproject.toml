@@ -28,6 +28,7 @@ qlib = ["pyqlib>=0.9", "lightgbm>=4"]
 backtest = ["vectorbt>=0.27"]
 ui = ["streamlit>=1.38"]
 masters = ["openai>=1.40"]
+cursor = ["cursor-sdk"]
 dev = ["pytest>=8", "pytest-cov", "ruff", "mypy"]
 full = ["streamlit>=1.38", "vectorbt>=0.27", "quantstats>=0.0.86", "openai>=1.40"]
 

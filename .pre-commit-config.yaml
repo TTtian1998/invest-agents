@@ -1,0 +1,8 @@
+repos:
+  - repo: local
+    hooks:
+      - id: no-cursor-api-key
+        name: 仓库不得出现 Cursor API 密钥前缀
+        language: system
+        entry: python scripts/check_no_cursor_key.py
+        pass_filenames: false

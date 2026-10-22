@@ -49,10 +49,44 @@ multifactor:
   top_n: 30
   require_quality: true
 
+graham:
+  top_n: 30
+  min_score: 0
+  require_quality: false
+
+lynch_peg:
+  top_n: 30
+  min_score: 0
+  require_quality: false
+
+canslim:
+  top_n: 30
+  min_score: 0
+  require_quality: false
+
+livermore:
+  top_n: 30
+  min_score: 0
+  require_quality: false
+
+fisher:
+  top_n: 30
+  min_score: 0
+  require_quality: false
+
+sizing:
+  enabled: false
+  name_cap: 0.10
+  stop_pct: 0.08
+
 merge:
-  formula: 0.6
-  qlib: 0.4
-  icir_threshold: 0.20       # 样本外 RankICIR 低于该值则按比例降低量化权重
+  formula: 0.90
+  qlib: 0.10                 # 测试集 RankIC 为负：仅做过闸公式内排序辅助
+  qlib_floor: 0.10
+  qlib_cap: 0.40
+  rank_ic_threshold: 0.03    # 前瞻实盘 RankIC 达此值滚到上限
+  icir_threshold: 0.20
+  formula_first: true        # 候选前 10 只从过闸公式池取，量化分不单独进池
 
 backtest:
   rebalance: monthly
@@ -66,12 +100,18 @@ backtest:
   min_sharpe: 0.0            # 示例数据较短，默认不因夏普挡掉公式
   require_beat_benchmark: true
   require_sharpe_ge_benchmark: true
+  require_half_excess: true   # 前后半段对同池超额都须 > 0
+  fill: next_open             # 调仓日 T 用 T 前数据，T+1 开盘成交
+  n_trials: 9                 # 已测公式数，用于 deflated Sharpe
+  min_coverage: 0.80          # 有持仓的调仓月 / 决策月；不足标数据不足，不是未过闸
   pit_universe: auto
   top_n: 3
 
 ai:
   top_n: 15
-  masters: [buffett, munger, graham, lynch]
+  judge_n: 10          # 研判只看候选前 10
+  backend: auto        # auto / openai / cursor / mock / external
+  masters: [buffett, munger, graham, lynch, fisher, livermore, oneil, marks]
 
 news:
   enabled: true
@@ -181,6 +221,7 @@ data:
   extra_symbols: ["510300", "000300", "000906"]   # 沪深300ETF/指数、中证800；回测基准，不含持仓
   incremental_lookback_days: 2
   detail_financials: true
+  hist_financials: true          # 带公告日的历史季报/快报/分红/预告（baostock + 东财）
 
 events:
   enabled: true

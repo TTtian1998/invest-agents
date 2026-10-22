@@ -5,6 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from zhiku.pipeline.settings import PipelineSettings
+from zhiku.screens.classics import (
+    screen_canslim,
+    screen_fisher,
+    screen_graham,
+    screen_livermore,
+    screen_lynch_peg,
+)
 from zhiku.screens.dividend import screen_dividend
 from zhiku.screens.fundamentals import Fundamentals
 from zhiku.screens.greenblatt import ScreenRow, screen_greenblatt
@@ -17,6 +24,11 @@ SCREEN_FUNCS = {
     "piotroski": lambda rows, cfg: screen_piotroski(rows, cfg.piotroski),
     "dividend": lambda rows, cfg: screen_dividend(rows, cfg.dividend),
     "multifactor": lambda rows, cfg: screen_multifactor(rows, cfg.multifactor),
+    "graham": lambda rows, cfg: screen_graham(rows, cfg.graham),
+    "lynch_peg": lambda rows, cfg: screen_lynch_peg(rows, cfg.lynch_peg),
+    "canslim": lambda rows, cfg: screen_canslim(rows, cfg.canslim),
+    "livermore": lambda rows, cfg: screen_livermore(rows, cfg.livermore),
+    "fisher": lambda rows, cfg: screen_fisher(rows, cfg.fisher),
 }
 
 

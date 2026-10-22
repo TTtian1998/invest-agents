@@ -302,14 +302,21 @@ def test_gated_formula_excluded_from_total() -> None:
         {"600519": "示例", "000333": "家电"},
         merge_formula,
         {"600519": 70.0, "000333": 40.0},
-        MergeSettings(formula=0.6, qlib=0.4),
+        MergeSettings(formula=0.6, qlib=0.4, formula_first=True),
     )
     by = {c.symbol: c for c in merged}
-    assert "greenblatt" not in by["600519"].screens
-    assert by["600519"].formula_score == 0.0
-    assert by["600519"].source == "qlib"
+    assert "600519" not in by
     assert "multifactor" in by["000333"].screens
     assert formula_all["600519"]["greenblatt"] == 90
+    opened = merge_scores(
+        {"600519": "示例", "000333": "家电"},
+        merge_formula,
+        {"600519": 70.0, "000333": 40.0},
+        MergeSettings(formula=0.6, qlib=0.4, formula_first=False),
+    )
+    opened_by = {c.symbol: c for c in opened}
+    assert opened_by["600519"].source == "qlib"
+    assert opened_by["600519"].formula_score == 0.0
 
 
 def test_label_forward_uses_next_open() -> None:
@@ -521,9 +528,11 @@ def test_brief_shows_emergency_reason_and_under_150() -> None:
         },
         universe_size=3,
         missing_ratio=0.1,
+        merge_weights={"oos_unverified": True, "qlib_weight_effective": 0.10, "formula_weight": 0.90, "note": "量化样本外未验证。锁定测试集 RankIC 为负。"},
     )
     md = render("daily_brief.md.j2", daily=daily)
     assert len(md.splitlines()) <= 150
+    assert "量化样本外未验证" in md
     assert "价格未确认" in md
     assert "FOMC" in md
     assert "缺数据" in md

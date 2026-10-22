@@ -12,6 +12,7 @@ import json
 import os
 from dataclasses import dataclass, field
 
+from zhiku.review.checklists import MasterChecklist, run_checklists
 from zhiku.screens.fundamentals import Fundamentals
 
 MASTERS = {
@@ -19,6 +20,17 @@ MASTERS = {
     "munger": "芒格：能力圈、逆向思考、避免蠢行，关注治理与激励。",
     "graham": "格雷厄姆：安全边际、资产价值和利润稳定性，避免概念炒作。",
     "lynch": "林奇：用常识理解公司如何赚钱，增长是否可被订单/份额验证。",
+    "fisher": "费雪：长期高回报与研发。",
+    "marks": "马克斯：周期位置与二阶思维。",
+    "livermore": "利弗莫尔：顺势与止损。",
+    "oneil": "欧奈尔：CAN SLIM。",
+    "drukenmiller": "德鲁肯米勒：流动性、集中、认错。",
+    "dalio": "达利欧：杠杆与风险平价约束。",
+    "taleb": "塔勒布：避免脆弱与左尾。",
+    "duan": "段永平：商业模式与不懂不做。",
+    "zhanglei": "张磊：长期主义与生意本质。",
+    "greenblatt": "格林布拉特：高 ROC 与高盈利收益率。",
+    "soros": "索罗斯：反身性（缺叙事则缺数据）。",
 }
 
 SKIP_REASON_NO_KEY = "未配置 OPENAI_API_KEY / ZHIKU_LLM_KEY，跳过 AI 审核"
@@ -31,6 +43,8 @@ class MasterOpinion:
     stance: str  # 买入 / 观察 / 回避 / 跳过
     rationale: str
     skipped: bool = False
+    checks: list[dict] = field(default_factory=list)
+    school: str = ""
 
 
 @dataclass
@@ -42,6 +56,7 @@ class AuditCard:
     debate: str | None = None
     skipped: bool = False
     skip_reason: str | None = None
+    disagreements: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -51,12 +66,15 @@ class AuditCard:
             "skipped": self.skipped,
             "skip_reason": self.skip_reason,
             "debate": self.debate,
+            "disagreements": list(self.disagreements),
             "opinions": [
                 {
                     "master": o.master,
                     "stance": o.stance,
                     "rationale": o.rationale,
                     "skipped": o.skipped,
+                    "school": o.school,
+                    "checks": o.checks,
                 }
                 for o in self.opinions
             ],
@@ -90,64 +108,59 @@ def _snapshot_text(row: Fundamentals) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def audit_symbol(row: Fundamentals, masters: list[str]) -> AuditCard:
-    key = llm_key()
-    if not key:
-        return AuditCard(
-            symbol=row.symbol,
-            name=row.name,
-            conclusion="跳过",
-            skipped=True,
-            skip_reason=SKIP_REASON_NO_KEY,
-            opinions=[
-                MasterOpinion(m, "跳过", SKIP_REASON_NO_KEY, skipped=True) for m in masters
-            ],
-        )
-    try:
-        import openai  # noqa: F401
-    except ImportError:
-        return AuditCard(
-            symbol=row.symbol,
-            name=row.name,
-            conclusion="跳过",
-            skipped=True,
-            skip_reason=SKIP_REASON_NO_LIB,
-            opinions=[
-                MasterOpinion(m, "跳过", SKIP_REASON_NO_LIB, skipped=True) for m in masters
-            ],
-        )
+def _from_checklist(card: MasterChecklist) -> MasterOpinion:
+    return MasterOpinion(
+        master=card.master,
+        stance=card.stance,
+        rationale=card.rationale(),
+        skipped=False,
+        checks=[c.to_dict() for c in card.items],
+        school=card.school,
+    )
 
-    opinions: list[MasterOpinion] = []
-    for master in masters:
-        desc = MASTERS.get(master, master)
-        prompt = (
-            f"你扮演{desc}\n"
-            "下面是虚构研究用的财务快照（不是真实账户）。"
-            "请给出结论（买入/观察/回避）和不超过 80 字的中文理由。"
-            "只输出 JSON：{{\"stance\": \"...\", \"rationale\": \"...\"}}\n"
-            f"{_snapshot_text(row)}"
-        )
+
+def audit_symbol(row: Fundamentals, masters: list[str]) -> AuditCard:
+    """先走规则清单（引用字段）。有 LLM key 时只追加一句，不覆盖清单。"""
+    cards, conflicts = run_checklists(row, masters)
+    opinions = [_from_checklist(c) for c in cards]
+    extra_note = None
+    key = llm_key()
+    if key:
         try:
-            raw = _call_openai(prompt)
-        except Exception as exc:  # noqa: BLE001
-            opinions.append(MasterOpinion(master, "跳过", f"调用失败: {exc}", skipped=True))
-            continue
-        if not raw:
-            opinions.append(MasterOpinion(master, "跳过", "空响应", skipped=True))
-            continue
-        stance, rationale = "观察", raw
-        try:
-            start, end = raw.find("{"), raw.rfind("}")
-            if start >= 0 and end > start:
-                data = json.loads(raw[start : end + 1])
-                stance = str(data.get("stance") or "观察")
-                rationale = str(data.get("rationale") or raw)
-        except json.JSONDecodeError:
-            pass
-        opinions.append(MasterOpinion(master, stance, rationale, skipped=False))
+            import openai  # noqa: F401
+        except ImportError:
+            extra_note = SKIP_REASON_NO_LIB
+            key = None
+    if key:
+        for i, master in enumerate(masters):
+            desc = MASTERS.get(master, master)
+            prompt = (
+                f"你扮演{desc}\n"
+                "下面是虚构研究用的财务快照（不是真实账户）。"
+                "已有规则结论，请用不超过 40 字补充一句，不要改数字。\n"
+                f"规则结论：{opinions[i].stance}\n"
+                f"{_snapshot_text(row)}"
+            )
+            try:
+                raw = _call_openai(prompt)
+            except Exception as exc:  # noqa: BLE001
+                extra_note = f"LLM 失败: {exc}"
+                break
+            if raw:
+                opinions[i].rationale = opinions[i].rationale + "｜补充：" + raw[:80]
+    elif extra_note is None:
+        extra_note = "未配置 LLM，使用规则模板"
 
     conclusion = _vote(opinions)
-    return AuditCard(symbol=row.symbol, name=row.name, conclusion=conclusion, opinions=opinions)
+    return AuditCard(
+        symbol=row.symbol,
+        name=row.name,
+        conclusion=conclusion,
+        opinions=opinions,
+        skipped=False,
+        skip_reason=extra_note,
+        disagreements=conflicts,
+    )
 
 
 def _vote(opinions: list[MasterOpinion]) -> str:

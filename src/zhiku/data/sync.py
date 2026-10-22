@@ -78,6 +78,7 @@ def sync_market(
     incremental: bool = False,
     lookback_days: int = 2,
     detail_financials: bool = True,
+    hist_financials: bool | None = None,
     progress: Progress | None = None,
 ) -> SyncReport:
     import time
@@ -128,6 +129,11 @@ def sync_market(
                 _sync_cn_symbol_fin(store, fetcher, symbol, resume, report)
     if detail_financials:
         _sync_detail_financials(store, fetcher, symbols, resume, report, workers, progress)
+    run_hist = (not incremental) if hist_financials is None else bool(hist_financials)
+    if run_hist:
+        _sync_hist_yjbb(store, fetcher, start, end, resume, report, progress)
+        _sync_hist_fundamentals(store, fetcher, symbols, start, end, resume, report, workers, progress)
+        _sync_hist_dividends(store, fetcher, symbols, resume, report, workers, progress)
     _sync_cn_bars(store, fetcher, symbols, start, end, resume, report, "none", workers, progress)
     cov = store.coverage(symbols, adjust="qfq")
     report.notes.append(
@@ -512,6 +518,225 @@ def _sync_detail_financials(
             done += 1
             if done == 1 or done % 20 == 0 or done == len(pending):
                 _log(progress, f"明细财务 {done}/{len(pending)} {symbol}")
+
+
+def _commit_merged_statement(store: MarketStore, row: dict, report: SyncReport) -> None:
+    from zhiku.data.detail_fin import merge_payload
+
+    symbol = row.get("symbol")
+    period = row.get("period")
+    kind = row.get("kind")
+    existing = store.statement_period(symbol, kind, period) if symbol and period and kind else None
+    if existing:
+        row["payload"] = merge_payload(existing.get("payload"), row.get("payload"))
+        if row.get("announced_is_period") and existing.get("announced"):
+            try:
+                row["announced"] = date.fromisoformat(str(existing["announced"])[:10])
+                row["announced_is_period"] = False
+            except ValueError:
+                pass
+    if row.get("announced_is_period"):
+        store.log_missing(symbol, f"{kind}.announced", period, "历史财务无公告日，用报告期")
+        report.missing += 1
+    store.upsert_statements([row])
+
+
+def _sync_hist_yjbb(
+    store: MarketStore,
+    fetcher: MarketFetcher,
+    start: date,
+    end: date,
+    resume: bool,
+    report: SyncReport,
+    progress: Progress | None,
+) -> None:
+    """整表业绩快报存 kind=yjbb，给 PIT overlay 每股收益，不覆盖 income 三表。"""
+    periods = _quarter_ends(start, end)
+    got = 0
+    for period in periods:
+        job = f"hist_yjbb:{period.isoformat()}"
+        if resume and store.last_ok(job, "*") is not None:
+            got += 1
+            continue
+        _log(progress, f"历史业绩快报 {period}")
+        raw = timed_call(fetcher.bulk_financials, 90, period, "yjbb", field="hist_yjbb")
+        if isinstance(raw, MissingData):
+            store.log_missing(None, job, period, raw.reason)
+            store.set_state(job, "*", last_ok=None, status="missing", error=raw.reason)
+            report.missing += 1
+            continue
+        store.upsert_statements(raw)
+        store.set_state(job, "*", last_ok=end, status="ok")
+        got += 1
+    report.notes.append(f"历史业绩快报 {got}/{len(periods)} 期")
+
+
+def _needs_hist_fin(store: MarketStore, symbol: str) -> bool:
+    from zhiku.data.compute import pick_num
+
+    for kind in ("income", "yjbb"):
+        hist = store.statements_history(symbol, kind, now_shanghai().date())
+        for row in hist[:4]:
+            payload = row.get("payload") or {}
+            if pick_num(payload, "eps") is not None or pick_num(payload, "shares") is not None:
+                return False
+    return True
+
+
+def _needs_hist_div(store: MarketStore, symbol: str) -> bool:
+    import pandas as pd
+
+    divs = store.dividends_frame([symbol])
+    if divs is None or divs.empty:
+        return True
+    raw = divs["announced"] if "announced" in divs.columns else None
+    if raw is None or raw.isna().all():
+        raw = divs["ex_date"] if "ex_date" in divs.columns else None
+    if raw is None:
+        return True
+    dates = pd.to_datetime(raw, errors="coerce")
+    if dates.notna().any() and int(dates.min().year) <= now_shanghai().date().year - 3:
+        return False
+    return True
+
+
+def _sync_hist_fundamentals(
+    store: MarketStore,
+    fetcher: MarketFetcher,
+    symbols: list[str],
+    start: date,
+    end: date,
+    resume: bool,
+    report: SyncReport,
+    workers: int,
+    progress: Progress | None,
+) -> None:
+    job = "hist_fin"
+    pending: list[str] = []
+    for symbol in symbols:
+        if is_cn_etf(symbol):
+            continue
+        if resume and store.job_status(job, symbol) == "missing":
+            continue
+        if resume and store.last_ok(job, symbol) is not None:
+            continue
+        if resume and not _needs_hist_fin(store, symbol):
+            store.set_state(job, symbol, last_ok=now_shanghai().date(), status="ok")
+            continue
+        pending.append(symbol)
+    _log(progress, f"历史季报待拉 {len(pending)}/{len(symbols)}")
+    if not pending:
+        return
+
+    def _fetch(symbol: str):
+        raw = timed_call(fetcher.cn_hist_financials, 180, symbol, start, end, symbol=symbol, field=job)
+        return symbol, raw
+
+    def _commit(symbol: str, raw) -> None:
+        if isinstance(raw, MissingData):
+            store.log_missing(symbol, job, None, raw.reason)
+            store.set_state(job, symbol, last_ok=None, status="missing", error=raw.reason)
+            report.missing += 1
+            return
+        for row in raw.get("statements") or []:
+            _commit_merged_statement(store, row, report)
+        for row in raw.get("forecasts") or []:
+            _commit_merged_statement(store, row, report)
+        if raw.get("dividends"):
+            store.upsert_dividends(raw["dividends"])
+        store.set_state(job, symbol, last_ok=now_shanghai().date(), status="ok")
+        store.set_state("hist_forecast", symbol, last_ok=now_shanghai().date(), status="ok")
+        report.statement_symbols += 1
+
+    done = 0
+    pool_n = min(max(1, workers), len(pending))
+    if pool_n <= 1:
+        for symbol in pending:
+            _, raw = _fetch(symbol)
+            _commit(symbol, raw)
+            done += 1
+            if done == 1 or done % 20 == 0 or done == len(pending):
+                _log(progress, f"历史季报 {done}/{len(pending)} {symbol}")
+        return
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    with ThreadPoolExecutor(max_workers=pool_n) as pool:
+        futs = {pool.submit(_fetch, s): s for s in pending}
+        for fut in as_completed(futs):
+            symbol = futs[fut]
+            try:
+                symbol, raw = fut.result()
+            except Exception as exc:  # noqa: BLE001
+                raw = MissingData(str(exc), symbol=symbol)
+            _commit(symbol, raw)
+            done += 1
+            if done == 1 or done % 20 == 0 or done == len(pending):
+                _log(progress, f"历史季报 {done}/{len(pending)} {symbol}")
+
+
+def _sync_hist_dividends(
+    store: MarketStore,
+    fetcher: MarketFetcher,
+    symbols: list[str],
+    resume: bool,
+    report: SyncReport,
+    workers: int,
+    progress: Progress | None,
+) -> None:
+    job = "hist_div"
+    pending: list[str] = []
+    for symbol in symbols:
+        if is_cn_etf(symbol):
+            continue
+        if resume and store.job_status(job, symbol) == "missing":
+            continue
+        if resume and store.last_ok(job, symbol) is not None:
+            continue
+        if resume and not _needs_hist_div(store, symbol):
+            store.set_state(job, symbol, last_ok=now_shanghai().date(), status="ok")
+            continue
+        pending.append(symbol)
+    _log(progress, f"历史分红待拉 {len(pending)}/{len(symbols)}")
+    if not pending:
+        return
+
+    def _fetch(symbol: str):
+        raw = timed_call(fetcher.cn_hist_dividends, 50, symbol, symbol=symbol, field=job)
+        return symbol, raw
+
+    def _commit(symbol: str, raw) -> None:
+        if isinstance(raw, MissingData):
+            store.log_missing(symbol, job, None, raw.reason)
+            store.set_state(job, symbol, last_ok=None, status="missing", error=raw.reason)
+            report.missing += 1
+            return
+        store.upsert_dividends(raw)
+        store.set_state(job, symbol, last_ok=now_shanghai().date(), status="ok")
+
+    done = 0
+    pool_n = min(max(1, workers), len(pending))
+    if pool_n <= 1:
+        for symbol in pending:
+            _, raw = _fetch(symbol)
+            _commit(symbol, raw)
+            done += 1
+            if done == 1 or done % 20 == 0 or done == len(pending):
+                _log(progress, f"历史分红 {done}/{len(pending)} {symbol}")
+        return
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    with ThreadPoolExecutor(max_workers=pool_n) as pool:
+        futs = {pool.submit(_fetch, s): s for s in pending}
+        for fut in as_completed(futs):
+            symbol = futs[fut]
+            try:
+                symbol, raw = fut.result()
+            except Exception as exc:  # noqa: BLE001
+                raw = MissingData(str(exc), symbol=symbol)
+            _commit(symbol, raw)
+            done += 1
+            if done == 1 or done % 20 == 0 or done == len(pending):
+                _log(progress, f"历史分红 {done}/{len(pending)} {symbol}")
 
 
 def _sync_bulk_financials(

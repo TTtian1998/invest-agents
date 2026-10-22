@@ -71,10 +71,26 @@ class MultifactorSettings(BaseModel):
     require_quality: bool = True
 
 
+class ClassicScreenSettings(BaseModel):
+    top_n: int = 30
+    min_score: float = 0.0
+    require_quality: bool = False
+
+
+class SizingSettings(BaseModel):
+    enabled: bool = False
+    name_cap: float = 0.10
+    stop_pct: float = 0.08
+
+
 class MergeSettings(BaseModel):
-    formula: float = 0.6
-    qlib: float = 0.4
+    formula: float = 0.90
+    qlib: float = 0.10
+    qlib_floor: float = 0.10
+    qlib_cap: float = 0.40
+    rank_ic_threshold: float = 0.03
     icir_threshold: float = 0.20
+    formula_first: bool = True
 
 
 class BacktestSettings(BaseModel):
@@ -91,11 +107,28 @@ class BacktestSettings(BaseModel):
     benchmark_symbols: list[str] = Field(default_factory=lambda: ["510300", "000300", "000906"])
     sanity_max_ann_gap: float = 0.25
     pit_universe: str = "auto"
+    require_half_excess: bool = True
+    fill: str = "next_open"
+    n_trials: int = 9
+    min_coverage: float = 0.80
 
 
 class AISettings(BaseModel):
     top_n: int = 15
-    masters: list[str] = Field(default_factory=lambda: ["buffett", "munger", "graham", "lynch"])
+    judge_n: int = 10
+    backend: str = "auto"
+    masters: list[str] = Field(
+        default_factory=lambda: [
+            "buffett",
+            "munger",
+            "graham",
+            "lynch",
+            "fisher",
+            "livermore",
+            "oneil",
+            "marks",
+        ]
+    )
 
 
 class NewsScoreWeights(BaseModel):
@@ -270,6 +303,7 @@ class DataSettings(BaseModel):
     slippage_bps: float = 5.0
     incremental_lookback_days: int = 2
     detail_financials: bool = True
+    hist_financials: bool = True
 
 
 class EventSettings(BaseModel):
@@ -347,6 +381,12 @@ class PipelineSettings(BaseModel):
     piotroski: PiotroskiSettings = Field(default_factory=PiotroskiSettings)
     dividend: DividendSettings = Field(default_factory=DividendSettings)
     multifactor: MultifactorSettings = Field(default_factory=MultifactorSettings)
+    graham: ClassicScreenSettings = Field(default_factory=ClassicScreenSettings)
+    lynch_peg: ClassicScreenSettings = Field(default_factory=ClassicScreenSettings)
+    canslim: ClassicScreenSettings = Field(default_factory=ClassicScreenSettings)
+    livermore: ClassicScreenSettings = Field(default_factory=ClassicScreenSettings)
+    fisher: ClassicScreenSettings = Field(default_factory=ClassicScreenSettings)
+    sizing: SizingSettings = Field(default_factory=SizingSettings)
     merge: MergeSettings = Field(default_factory=MergeSettings)
     backtest: BacktestSettings = Field(default_factory=BacktestSettings)
     ai: AISettings = Field(default_factory=AISettings)

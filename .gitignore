@@ -2,6 +2,7 @@
 /kb/
 *.local.yaml
 .env
+*.key
 config/x_accounts.yaml
 
 # 示例运行时生成的日志、缓存与报告

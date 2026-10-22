@@ -11,7 +11,7 @@ import pandas as pd
 
 from zhiku.data.compute import pick_num, ratio
 from zhiku.data.store import MarketStore
-from zhiku.factors.features import FEATURE_NAMES, make_feature_panel
+from zhiku.factors.features import make_feature_panel
 
 # 冻结分割。改日期等于换测试集，消融结束后不得再动。
 TRAIN_END = date(2025, 4, 30)
@@ -43,6 +43,10 @@ CH_FEATURE_NAMES = [
     "ch_low_vol",
 ]
 CH_EP_NAME = "ch_ep"
+REVISION_FEATURE_NAMES = [
+    "rev_fy1",
+    "rev_surprise",
+]
 
 
 def split_of(ts: pd.Timestamp) -> str:
@@ -97,6 +101,38 @@ def excess_vs_pool(label: pd.Series, membership: dict | None = None) -> pd.Serie
     return out
 
 
+def excess_vs_industry(
+    label: pd.Series,
+    industry: pd.Series | None,
+    membership: dict | None = None,
+) -> pd.Series:
+    """T+20 收益减当日同行等权，得到行业中性超额。缺行业归入「未知」。"""
+    if label.empty:
+        return label
+    frame = label.rename("label").reset_index()
+    if membership:
+        from zhiku.backtest.universe import members_on
+
+        keep = []
+        for dt, part in frame.groupby("date"):
+            allowed = members_on(membership, dt)
+            if allowed:
+                keep.append(part[part["symbol"].isin(allowed)])
+            else:
+                keep.append(part)
+        frame = pd.concat(keep, ignore_index=True) if keep else frame
+    if industry is None or industry.empty:
+        frame["industry"] = "未知"
+    else:
+        ind = industry.rename("industry").reset_index()
+        frame = frame.merge(ind, on=["date", "symbol"], how="left")
+        frame["industry"] = frame["industry"].fillna("未知")
+    frame["label"] = frame["label"] - frame.groupby(["date", "industry"])["label"].transform("mean")
+    out = frame.set_index(["date", "symbol"])["label"]
+    out.name = "label"
+    return out
+
+
 def neutralize(
     values: pd.Series,
     *,
@@ -136,6 +172,7 @@ def make_labels(
     *,
     kind: str,
     membership: dict | None = None,
+    industry: pd.Series | None = None,
 ) -> pd.Series:
     if kind == "t2_close":
         raw = label_t2_close(bars)
@@ -143,6 +180,8 @@ def make_labels(
         raw = label_open_horizon(bars, 20)
     elif kind == "t20_open_xs":
         raw = excess_vs_pool(label_open_horizon(bars, 20), membership)
+    elif kind == "t20_open_ind_xs":
+        raw = excess_vs_industry(label_open_horizon(bars, 20), industry, membership)
     elif kind == "t5_open":
         raw = label_open_horizon(bars, 5)
     else:
@@ -202,6 +241,10 @@ def asof_score_frame(store: MarketStore, symbols: list[str], asof: date, feature
         fund = add_ch_ep(load_fund_features(store, symbols, [asof]))
         if not fund.empty:
             parts.append(last_cross_section(fund, asof) if isinstance(fund.index, pd.MultiIndex) else fund)
+    if "revision" in features:
+        rev = load_revision_features(store, symbols, [asof])
+        if not rev.empty:
+            parts.append(last_cross_section(rev, asof) if isinstance(rev.index, pd.MultiIndex) else rev)
     if not parts:
         return px
     out = pd.concat(parts, axis=1)
@@ -390,6 +433,101 @@ def _yoy(income: dict[str, Any]) -> float | None:
                 continue
             return val / 100.0 if abs(val) > 2 else val
     return None
+
+
+def load_revision_features(store: MarketStore, symbols: list[str], calendar: Iterable) -> pd.DataFrame:
+    """分析师/业绩预告修正。只用 announced≤特征日的 forecast；没有预告则整列缺数据。"""
+    cal = pd.DatetimeIndex(pd.to_datetime(list(calendar))).sort_values().unique()
+    if len(cal) == 0 or not symbols:
+        return pd.DataFrame(columns=REVISION_FEATURE_NAMES)
+    stmts = store.statements_frame(symbols)
+    if stmts.empty:
+        return pd.DataFrame(columns=REVISION_FEATURE_NAMES)
+    work = stmts.dropna(subset=["announced"]).copy()
+    work["announced"] = pd.to_datetime(work["announced"])
+    work = work[work["kind"].isin(["forecast", "income", "yjbb"])]
+    if work.empty:
+        return pd.DataFrame(columns=REVISION_FEATURE_NAMES)
+
+    def _payload(raw: Any) -> dict[str, Any]:
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+        return {}
+
+    rows = []
+    for symbol in symbols:
+        part = work[work["symbol"] == symbol].sort_values("announced")
+        forecasts: list[tuple[pd.Timestamp, float]] = []
+        actuals: list[tuple[pd.Timestamp, float]] = []
+        for _, rec in part.iterrows():
+            payload = _payload(rec.get("payload"))
+            announced = pd.Timestamp(rec["announced"])
+            if str(rec["kind"]) == "forecast":
+                val = payload.get("profit_forecast")
+                if val is None:
+                    val = payload.get("increment")
+                try:
+                    fval = float(val)
+                except (TypeError, ValueError):
+                    continue
+                forecasts.append((announced, fval))
+            else:
+                ni = pick_num(payload, "net_income")
+                if ni is not None:
+                    actuals.append((announced, float(ni)))
+        fc_df = pd.DataFrame(forecasts, columns=["announced", "forecast"]) if forecasts else pd.DataFrame()
+        ac_df = pd.DataFrame(actuals, columns=["announced", "actual"]) if actuals else pd.DataFrame()
+        base = pd.DataFrame({"date": cal})
+        if not fc_df.empty:
+            fc_df = fc_df.sort_values("announced")
+            fc_df["prev"] = fc_df["forecast"].shift(1)
+            merged = pd.merge_asof(base, fc_df, left_on="date", right_on="announced", direction="backward")
+            rev = np.where(
+                merged["forecast"].notna()
+                & merged["prev"].notna()
+                & (merged["prev"].abs() > 1e-12),
+                (merged["forecast"] - merged["prev"]) / merged["prev"].abs(),
+                np.nan,
+            )
+        else:
+            merged = base
+            rev = np.full(len(cal), np.nan)
+        if not ac_df.empty and not fc_df.empty and "forecast" in merged.columns:
+            ac_df = ac_df.sort_values("announced")
+            act = pd.merge_asof(
+                pd.DataFrame({"date": cal}),
+                ac_df,
+                left_on="date",
+                right_on="announced",
+                direction="backward",
+            )
+            fc_series = merged["forecast"]
+            surprise = np.where(
+                act["actual"].notna() & fc_series.notna() & (fc_series.abs() > 1e-12),
+                (act["actual"] - fc_series) / fc_series.abs(),
+                np.nan,
+            )
+        else:
+            surprise = np.full(len(cal), np.nan)
+        rows.append(
+            pd.DataFrame(
+                {
+                    "date": cal,
+                    "symbol": symbol,
+                    "rev_fy1": rev,
+                    "rev_surprise": surprise,
+                }
+            )
+        )
+    panel = pd.concat(rows, ignore_index=True)
+    panel["date"] = pd.to_datetime(panel["date"])
+    return panel.set_index(["date", "symbol"]).reindex(columns=REVISION_FEATURE_NAMES)
 
 
 def attach_industry_size(
