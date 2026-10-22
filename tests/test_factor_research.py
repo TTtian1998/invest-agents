@@ -90,7 +90,7 @@ def test_walk_forward_folds_end_before_test() -> None:
     label = pd.Series(rng * 0.5, index=idx)
     table = walk_forward_fold_metrics(pred, label)
     assert table["distribution"]["n_folds"] == len(WF_FOLDS)
-    assert all(f["end"] < TEST_START.isoformat() or True for f in table["folds"])
+    assert all(f["end"] < TEST_START.isoformat() for f in table["folds"])
     # 只有 2024H2 有样本
     by = {f["fold"]: f for f in table["folds"]}
     assert by["2024H2"]["n"] > 0

@@ -25,4 +25,5 @@ def test_factor_predict_untrained(tmp_path: Path, examples_dir: Path) -> None:
     result = RUNNER.invoke(app, ["--provider", "fixture", "factor", "predict"], env=env)
     assert result.exit_code == 0
     text = result.output + (result.stderr or "")
-    assert "未训练" in text
+    assert "not_published" in text
+    assert "factor publish" in text

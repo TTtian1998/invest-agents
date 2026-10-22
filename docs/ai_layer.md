@@ -1,6 +1,6 @@
 # AI 研判层
 
-分工：公式和量化做初筛，AI 做判断。没有 LLM key 时不装成已经判断，导出研判任务包，由外部代理（含每天 15:30 的 Cloud Agent）按本文写回。不是投资建议。
+分工：公式和量化做初筛，AI 做判断。没有 LLM key 时不装成已经判断，导出研判任务包，由外部审核者按本文写回（本项目不创建外部定时任务）。不是投资建议。
 
 ## 1. 发力点与出处
 
@@ -15,9 +15,9 @@
 - Lopez-Lira & Tang (2023, arXiv:2304.07619；修订 2024) 用 ChatGPT 给新闻标题打正/负/中，样本从模型训练截止日**之后**起算，分数对后续日收益有样本外预测力，小盘和负面新闻更强。
 - Yang, Liu & Wang (2023, arXiv:2306.06031) FinGPT：开源金融 LLM 的数据管线与 LoRA，应用包括情绪分析；我们不训练自己的 FinGPT，只借用「文本 → 结构化任务」的分工。
 
-我们的实现：抽取结果写入决策日志，字段固定，才能在 T+5 / T+20 对同池等权算超额。缺原文就记缺数据，不编。
+研究接口和外部整包结果支持：抽取结果写入决策日志，字段固定，才能在 T+5 / T+20 对同池等权算超额。缺原文就记缺数据，不编。
 
-### b. 前 10 名：清单 + 多空辩论
+### b. 前 10 名：确定性清单 + 单层举证审核
 
 规则清单（是/否/缺数据 + 字段引用）先跑，AI 只在清单之上做多空辩论，输出「研究跟进 / 观察 / 回避」、置信度、失效条件、时间止损。每一条主张必须引用当时可见的字段或原文，不能空口。
 
@@ -30,7 +30,7 @@
 
 ### c. 市场状态
 
-用宏观锚点（利率预期、地缘温度、硬日历）和近窗风格（动量或反转、价值或成长的简单收益差）建议当前更值得信哪类公式，并写进日志，事后用 scorecard 检验。这是启发式记录，不是 Dalio 全天候，也不是已发表的体制转换模型。
+显式研究接口或外部整包审核可用宏观锚点（利率预期、地缘温度、硬日历）和近窗风格（动量或反转、价值或成长的简单收益差）建议当前更值得信哪类公式，并写进日志，事后用 scorecard 检验。这是启发式记录，不是 Dalio 全天候，也不是已发表的体制转换模型。
 
 Lopez-Lira & Tang 的结果不能直接当成「A 股该信动量」；LSY (2019) 仍提示中国主异象是反转。状态建议必须事后对账，不能当日改闸门。
 
@@ -62,11 +62,11 @@ Cursor 没有 OpenAI 兼容的 `/v1/chat/completions`。`ZHIKU_LLM_BACKEND=curso
 
 外部模式：
 
-1. `zk export-review`（日报在无 key 时也会写）产出 `reports/YYYY-MM-DD-review-pack.json`
-2. 外部代理按第 4 节填 `review_result.v1`
-3. `zk ingest-review path.json` 校验后写入决策日志，并出现在次日报告
+1. 先运行 daily 保存证据，`zk export-review --date DATE` 只返回 `reports/review-snapshots/<snapshot_id>.json`，不重跑 daily。日期文件仅是最新快照别名。
+2. 外部审核者按第 4 节填 `review_result.v1`，原样带回 snapshot_id/asof。
+3. `zk ingest-review path.json` 校验候选、rank/score、引用并写入决策日志；日报仍指向同一快照时更新该报告，否则保留历史决策。不会把旧结论套到次日新证据。
 
-每天 15:30 的例行 Cloud Agent 按本文担任这个外部代理：读任务包，只使用包里的候选、截面、新闻摘录和清单，不编造包外数字，写回结果。
+同一快照结果可重复导入，冲突结论拒绝覆盖。daily 复用完全一致的已验证结果；旧版没有 snapshot_id 的日志不作为新日报审核。默认不再调用旧大师补充、独立新闻抽取、regime LLM 和自动 TradingAgents；通用后端每候选一次，整包后端一次。研究辅助函数与显式 debate 命令保留。
 
 ## 3. 防止装饰
 
@@ -76,9 +76,9 @@ Cursor 没有 OpenAI 兼容的 `/v1/chat/completions`。`ZHIKU_LLM_BACKEND=curso
 
 ## 4. 任务包 / 写回格式
 
-任务包 `zhiku.review_pack.v1`：`asof`、候选（代码、公式分、量化分、来源公式）、截面字段、大师清单、新闻原文摘录、宏观锚点、`docs/ai_layer.md` 的约束摘要。不含持仓数量、成本、账户。
+任务包 `zhiku.review_pack.v1`：`snapshot_id`（全部有界证据的 SHA-256）、`asof`、候选（代码、公式分、量化分、来源公式）、截面字段、大师清单、新闻原文摘录、宏观锚点、`docs/ai_layer.md` 的约束摘要。不含持仓数量、成本、账户。
 
-写回 `zhiku.review_result.v1`：
+写回 `zhiku.review_result.v1`（必须带 snapshot_id/asof）：
 
 - `extractions[]`：`symbol, event_type, direction (-1/0/+1), surprise, novelty, cite`
 - `judgments[]`：`symbol, stance (研究跟进|观察|回避), confidence, invalidation, time_stop_days, long[], short[]`；`long`/`short` 每条有 `claim` 和 `cite`

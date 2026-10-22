@@ -51,7 +51,7 @@ def apply_event_layer(
         implied = load_implied_moves(paths.fixtures / "implied_moves.yaml")
     attach_surprise(clusters, cards, implied)
 
-    stats = summarize_samples(list(samples or []))
+    stats = summarize_samples(list(samples)) if samples else {}
     hist_avgs = {k: (v.avg_t1, v.avg_t5) for k, v in stats.items()}
     attach_novelty(
         clusters,
@@ -102,7 +102,7 @@ def apply_event_layer(
                 notes.extend(dispatch("zhiku 应急模式", body))
             except Exception as exc:  # noqa: BLE001
                 notes.append(f"应急推送跳过：{exc}")
-    crowd_stats = summarize_by_crowding(samples or [])
+    crowd_stats = summarize_by_crowding(samples) if samples else {}
     log = DecisionLog(paths.journal / "decisions.jsonl")
     log.append(
         "event_layer",

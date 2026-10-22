@@ -305,3 +305,57 @@ def test_pick_coverage_counts_empty_months() -> None:
     assert cov["n_covered"] == 2
     assert cov["n_empty"] == 1
     assert abs(float(cov["coverage_ratio"]) - 2 / 3) < 1e-12
+
+
+def test_acceptance_retains_strategy_and_benchmark_close_fallbacks(monkeypatch):
+    from zhiku.backtest.engine import attach_benchmarks
+    from zhiku.backtest.pit_gate import evaluate_screens
+    close = _close_path()
+    opens = close.copy()
+    opens["BBB"] = float("nan")
+    dates = pd.DatetimeIndex(close.index).to_series().groupby(pd.DatetimeIndex(close.index).to_period("M")).last()
+    membership = {day: ["AAA", "BBB"] for day in dates}
+    picks = {day: ["AAA"] for day in dates}
+    monkeypatch.setattr("zhiku.backtest.pit_gate.monthly_screen_picks", lambda *a, **k: {"greenblatt": picks})
+    results = evaluate_screens(PipelineSettings(), close=close, opens=opens, membership=membership, names=["greenblatt"])
+    assert results["greenblatt"].close_fallback_fills == 0
+    assert results["universe_ew"].close_fallback_fills > 0
+    attach_benchmarks(results["greenblatt"], results)
+    assert results["greenblatt"].benchmarks["universe_ew"]["close_fallback_fills"] > 0
+    assert results["greenblatt"].benchmarks["universe_ew"]["engine"] == "pandas-pit"
+
+
+
+def test_serialized_real_backtest_requires_actual_open_fills():
+    from zhiku.backtest.pit_gate import backtest_timed_picks
+    from zhiku.pipeline.artifacts import validated_gate_status
+    close = _close_path()
+    dates = pd.DatetimeIndex(close.index).to_series().groupby(pd.DatetimeIndex(close.index).to_period("M")).last()
+    picks = {day: ["AAA"] for day in dates}
+    settings = PipelineSettings()
+    settings.backtest.min_sharpe = -100
+    settings.backtest.require_beat_benchmark = False
+    settings.backtest.require_half_excess = False
+    settings.backtest.require_sharpe_ge_benchmark = False
+    complete = backtest_timed_picks(close, picks, settings.backtest, screen="greenblatt", opens=close)
+    assert complete.to_dict()["close_fallback_fills"] == 0
+    assert validated_gate_status(complete.to_dict(), settings) == "passed"
+    sparse = close.copy()
+    sparse.iloc[1:] = float("nan")
+    incomplete = backtest_timed_picks(close, picks, settings.backtest, screen="greenblatt", opens=sparse)
+    assert incomplete.to_dict()["close_fallback_fills"] > 0
+    assert validated_gate_status(incomplete.to_dict(), settings) == "insufficient"
+
+
+
+def test_irrelevant_unheld_symbol_does_not_count_as_close_fallback():
+    idx = pd.to_datetime(["2026-01-01", "2026-01-02", "2026-02-02", "2026-02-03", "2026-02-04"])
+    close = pd.DataFrame({"AAA": [10.] * 5, "BBB": [20.] * 5}, index=idx)
+    opens = close.copy()
+    opens.loc[pd.Timestamp("2026-01-02"), "BBB"] = float("nan")
+    picks = {pd.Timestamp("2026-01-01"): ["AAA"], pd.Timestamp("2026-02-02"): ["BBB"]}
+    _, _, extras = rebalance_equal_weight(close, picks, opens=opens, cost_bps=0, slippage_bps=0, fill="next_open")
+    assert extras["close_fallback_fills"] == 0
+    opens.loc[pd.Timestamp("2026-02-03"), "AAA"] = float("nan")
+    _, _, held = rebalance_equal_weight(close, picks, opens=opens, cost_bps=0, slippage_bps=0, fill="next_open")
+    assert held["close_fallback_fills"] == 1  # A held name needs a valid exit/valuation open.

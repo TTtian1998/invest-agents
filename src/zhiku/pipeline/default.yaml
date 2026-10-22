@@ -74,6 +74,12 @@ fisher:
   min_score: 0
   require_quality: false
 
+# 研究产物由显式命令发布；daily 不自动训练/回测。
+artifacts:
+  gate_max_age_days: 45
+  model_max_age_days: 45
+  price_max_age_days: 7
+
 sizing:
   enabled: false
   name_cap: 0.10
@@ -81,7 +87,7 @@ sizing:
 
 merge:
   formula: 0.90
-  qlib: 0.10                 # 测试集 RankIC 为负：仅做过闸公式内排序辅助
+  qlib: 0.10                 # 已发布模型仅做过闸公式内排序辅助
   qlib_floor: 0.10
   qlib_cap: 0.40
   rank_ic_threshold: 0.03    # 前瞻实盘 RankIC 达此值滚到上限

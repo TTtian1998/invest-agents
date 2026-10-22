@@ -88,6 +88,8 @@ class ReviewResult(BaseModel):
 
     schema_name: str = Field(default=RESULT_SCHEMA, alias="schema")
     asof: str
+    # Legacy records may be parsed, but cannot be replayed without a bound snapshot.
+    snapshot_id: str = ""
     extractions: list[Extraction] = Field(default_factory=list)
     judgments: list[Judgment] = Field(default_factory=list)
     regime: RegimeAdvice | None = None

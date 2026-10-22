@@ -372,6 +372,12 @@ class EventSettings(BaseModel):
     stale_after_halflives: float = 1.0
 
 
+class ArtifactSettings(BaseModel):
+    gate_max_age_days: int = Field(default=45, ge=1)
+    model_max_age_days: int = Field(default=45, ge=1)
+    price_max_age_days: int = Field(default=7, ge=1)
+
+
 class PipelineSettings(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -386,6 +392,7 @@ class PipelineSettings(BaseModel):
     canslim: ClassicScreenSettings = Field(default_factory=ClassicScreenSettings)
     livermore: ClassicScreenSettings = Field(default_factory=ClassicScreenSettings)
     fisher: ClassicScreenSettings = Field(default_factory=ClassicScreenSettings)
+    artifacts: ArtifactSettings = Field(default_factory=ArtifactSettings)
     sizing: SizingSettings = Field(default_factory=SizingSettings)
     merge: MergeSettings = Field(default_factory=MergeSettings)
     backtest: BacktestSettings = Field(default_factory=BacktestSettings)
