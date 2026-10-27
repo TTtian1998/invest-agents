@@ -232,3 +232,7 @@ ruff check src tests
 mypy src/zhiku
 pytest                 # 默认 -m "not network"
 ```
+
+## ETF 组合策略研究（实验性）
+
+新增离线 `zk research etf --spec ... --bars ... --split ... --out ...`：固定参数动量轮动与同约束等权再平衡，目标权重/现金、T+1 开盘及每日组合账本、时间顺序样本外报告。研究结果不会自动发布或进入 daily。可运行的**虚构数据工程示例**与实数据限制见 [ETF_STRATEGY_RESEARCH.md](docs/ETF_STRATEGY_RESEARCH.md)。

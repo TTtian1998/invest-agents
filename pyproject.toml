@@ -38,14 +38,12 @@ zk = "zhiku.cli:app"
 [tool.hatch.metadata]
 allow-direct-references = true
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/zhiku"]
+
+# In-package templates/YAML are included once by packages above.
 [tool.hatch.build.targets.wheel.force-include]
-"src/zhiku/notify/templates" = "zhiku/notify/templates"
-"src/zhiku/pipeline/default.yaml" = "zhiku/pipeline/default.yaml"
-"src/zhiku/macro/chains.yaml" = "zhiku/macro/chains.yaml"
-"src/zhiku/news/grades.yaml" = "zhiku/news/grades.yaml"
 "config/x_accounts.example.yaml" = "zhiku/news/x_accounts.example.yaml"
-"src/zhiku/events/supply_chains.yaml" = "zhiku/events/supply_chains.yaml"
-"src/zhiku/events/playbook.yaml" = "zhiku/events/playbook.yaml"
 
 [tool.pytest.ini_options]
 addopts = "-m \"not network\""

@@ -741,6 +741,23 @@ def factor_predict(ctx: typer.Context, date_text: Optional[str] = typer.Option(N
     typer.echo(scores or "{}")
 
 
+@research_app.command("etf")
+def research_etf(
+    ctx: typer.Context,
+    spec: Path = typer.Option(..., "--spec", exists=True, readable=True),
+    bars: Path = typer.Option(..., "--bars", exists=True, readable=True),
+    split: str = typer.Option(..., "--split", help="固定时间切分，样本外第一交易日 YYYY-MM-DD"),
+    out: Path = typer.Option(..., "--out", help="研究 JSON 输出目录；不写 daily 发布状态"),
+) -> None:
+    """离线 ETF 动量/等权对照实验；研究专用，不自动验收或发布。"""
+    from zhiku.strategies.research import run_research
+    try:
+        path = run_research(spec, bars, date.fromisoformat(split), out)
+    except (ValueError, OSError, TypeError, KeyError) as exc:
+        _die(f"ETF 研究拒绝：{exc}")
+    typer.echo(f"RESEARCH_ONLY: {path}")
+
+
 @research_app.command("gates")
 def research_gates(ctx: typer.Context, date_text: Optional[str] = typer.Option(None, "--date")) -> None:
     """从本地时点历史计算公式验收证据，不联网、不发布。"""
