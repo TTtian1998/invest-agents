@@ -135,7 +135,12 @@ def test_runner_uses_pack_not_per_symbol(tmp_path: Path, examples_dir: Path) -> 
             calls["pack"] += 1
             from zhiku.ai.pack import review_result_from_obj
 
-            return review_result_from_obj(_FICTIONAL_RESULT)
+            from copy import deepcopy
+
+            raw = deepcopy(_FICTIONAL_RESULT)
+            raw["snapshot_id"] = pack["snapshot_id"]
+            raw["regime"]["cite"] = "缺数据"
+            return review_result_from_obj(raw)
 
     paths = Paths.load(kb=tmp_path, fixtures=examples_dir / "fixtures")
     paths.ensure_runtime_dirs()

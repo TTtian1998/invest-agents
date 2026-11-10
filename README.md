@@ -1,6 +1,6 @@
 # zhiku
 
-把个人投研流程代码化的本地工具：选股公式 → 因子打分 → 回测闸门 → 新闻/宏观**分析**（不是标题搬运）→ 触发线纪律。LLM 只做可选分析层，**不进入触发线执行路径**。
+把个人投研流程代码化的本地工具：研究/验证 → 显式版本发布 → 每日正式候选与研究观察 → 单次 AI 审核 → 触发线纪律。LLM 只做可选分析层，**不进入触发线执行路径**。
 
 不接任何券商、不下单、不发消息（提醒通道需显式配置且默认跳过）。输出只有本地 markdown / HTML / JSON 和 stdout。
 
@@ -104,8 +104,11 @@ zk data sync --universe csi800 --years 3 --workers 4
 # 全市场：zk data sync --universe all --years 3
 # 中断后续传：同一 ZHIKU_KB 再跑（默认 --resume）；挂死标的记 missing，不插值
 zk factor prepare
-zk factor train          # 对比 lgb_lite 与 Alpha158，按 RankICIR→RankIC 均值选默认；按月重训
-zk --provider live daily --date 2026-10-21
+zk factor train          # 仅生成研究候选，不自动发布
+zk research gates --date 2026-10-22  # 本地 PIT 验收，输出不可变 JSON
+# 检查证据后：zk research publish-gates /path/to/<hash>.json --date 2026-10-22
+# 检查模型后：zk factor publish /path/to/models/lgb_lite.pkl --date 2026-10-22
+zk --provider live daily --date 2026-10-22
 # 交易日 cron（Asia/Shanghai 15:30）：
 # 30 15 * * 1-5 TZ=Asia/Shanghai ZHIKU_KB=/path/to/kb zk --provider live run-daily
 ```
@@ -117,31 +120,19 @@ zk --provider live daily --date 2026-10-21
 - 宏观事件窗口只给核心数据与央行（可配白名单）；会议/展会重要度封顶且不建窗口。公开日程补未来 7 天 FOMC。
 - 经典公式（Greenblatt / Piotroski / 分红）只用可交易过滤，不套 ROE/PE 质量门槛；门槛可配。
 - live 回测用本地库前复权；增量截面只写不复权，前复权按涨跌平移。回测池用**历史时点成分**（baostock 沪深300+中证500 回查中证800；不够则用月末已上市且有日线的全 A，并在报告标明）。超额和闸门对**同池时点等权**，对照行必须是闸门实际用的 **T+1 开盘** 等权，不是月末收盘等权。过闸前提：覆盖月数 ≥ 80%（不足标「数据不足」）；然后超额 > 0、Sharpe ≥ 等权、前后半段超额都 > 0。禁止用今日静态名单回测（前视）。
-- 量化分默认权重 0.10，只做过闸公式内排序辅助；锁定测试集 RankIC 为负时 brief 写「量化样本外未验证」。以后按前瞻实盘 RankIC 滚动更新。候选前 10 以过闸公式为主。未过闸与数据不足的公式分不计入总分，只在单票详情展示。应急必须有 VIX/指数价格确认，摘要写触发原因。
+- 量化分默认权重 0.10，只做过闸公式内排序辅助；没有可用的前瞻验证时 brief 写「量化样本外未验证」。未绑定版本的 live_rank_ic.json 不再自动放大权重。正式候选只从已发布过闸公式池取；量化不能单独进池。未过闸与数据不足的公式分不计入总分，只在单票详情展示。应急必须有 VIX/指数价格确认，摘要写触发原因。
 
-**本仓库云主机实测（中证800，近 3 年，跳过港美）：**
-
-| 步骤 | 耗时 | 结果 |
-| --- | --- | --- |
-| 首次 `zk data sync --universe csi800 --years 3 --workers 4 --skip-global` | 约 40–70 分钟 | 成分 800，qfq ≈798/801 |
-| 新浪明细财务（CSI800） | 约 25 分钟 | ebit 覆盖约 710/800，流动资产约 634/800 |
-| `zk data sync --incremental`（已同步池） | **1.5s** | 截面只写不复权；前复权按涨跌平移，禁止把原始价写入 qfq |
-| `zk factor train` | ~40s | 默认 **Alpha158** RankIC 0.026 RankICIR 0.177；量化权重 0.40×(0.177/0.20)=0.35。lgb_lite RankIC 0.002 RankICIR 0.015。五分位多空 +0.05%，区分度弱 |
-| `zk --provider live daily --date 2026-10-21` | ~3 min | **诚实 PIT**：每月公告日重算 + T+1 开盘。对照行同池等权是 T+1 的 **10.34%**（不是月末收盘 8.67%）。`gate_table_live.md`（livermore +45.4%）与中间 PIT（1034，今日名单 +4%～+8%）**已作废，前视**。以 `/opt/cursor/artifacts/zhiku-investor-principles/gate_table_pit.md` 与其后重跑表为准。 |
-
-A 股全市场（`--universe all --resume`）仍在跑：约 10605/16642 次尝试，库内 qfq **5645** 只。每日增量对已入库标的应在 10 分钟内。东财 hist 会熔断改 baostock。静态今日成分的 +17.6% 等权与中间 PIT 的 +4%～+17% 超额都是前视，不可与诚实表横比。
-
-分红旧实现把「每10股派息」当成现金总额/市值，中证800会空篮；已修正。配置见 `config/data_sync.example.yaml` 与 `pipeline.yaml` 的 `dividend.*`。
+新版不沿用旧实测表作为准入依据。历史研究仍见 `docs/research/`，实际可用状态以已发布版本为准。升级步骤、边界与兼容参数见 [MIGRATION.md](docs/MIGRATION.md)；完整分层见 [ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ## 命令
 
-全局选项：`--provider live|fixture`、`--kb`、`--fixtures`。
+全局选项：`--provider live|demo|disabled`（fixture 为 demo 兼容别名）、`--kb`、`--fixtures`。
 
 | 命令 | 作用 |
 | --- | --- |
 | `zk screen [greenblatt\|piotroski\|dividend\|multifactor\|all]` | 经典选股公式 |
-| `zk daily` | 选股→打分→回测闸门→AI 审核→新闻/宏观分析 |
-| `zk run-daily` | 非交易日跳过；增量同步→月度重训→daily→≤150 行摘要 |
+| `zk daily` | 读当前数据/已发布验收→正式候选/研究观察→单次 AI 审核 |
+| `zk run-daily` | 非交易日跳过；live 增量同步→daily→≤150 行摘要，不重训 |
 | `zk news [--kind all\|premarket-ah\|premarket-us\|midday]` | 新闻雷达（分析为主体，链接附后） |
 | `zk macro` | 宏观锚点：日历、预期差、剧本、传导链、事件窗口 |
 | `zk check --at 1455` | 14:55 判定；close 规则仅 PREVIEW |
@@ -150,12 +141,14 @@ A 股全市场（`--universe all --resume`）仍在跑：约 10605/16642 次尝�
 | `zk review --week` | 触发线命中率 + 事件剧本兑现 + 信源跟踪 |
 | `zk ui` | 本地看板（需 `[ui]`），含「宏观与事件」 |
 | `zk debate 600519` | 可选 TradingAgents |
-| `zk export-review` | 导出外部研判任务包（候选、截面、新闻摘录、大师清单） |
-| `zk ingest-review path.json` | 把 `zhiku.review_result.v1` 写回决策日志 |
+| `zk export-review --date DATE` | 只导出已保存证据快照，不重跑 daily |
+| `zk ingest-review path.json` | 精确匹配 snapshot_id/asof，记录并更新相同快照日报 |
 | `zk review-scorecard` | AI「研究跟进 / 回避」T+5、T+20 对同池等权超额，对照公式排名 |
 | `zk data sync` | 全市场增量同步到 `ZHIKU_KB/data`（可断点、限速） |
 | `zk backtest <公式\|trigger>` | 月度等权或触发线回测；live 用本地库价格 |
-| `zk factor prepare\|train\|predict` | 本地库→qlib bin→Alpha158/LightGBM |
+| `zk factor prepare\|train\|predict` | 准备/研究训练/已发布模型预测 |
+| `zk factor publish PATH` | 验证身份、非空训练、推理接口并显式发布模型 |
+| `zk research gates` / `publish-gates PATH` | 历史 PIT 验证 / 重新检查证据后显式发布公式准入 |
 
 未装可选 extra 时命令降级或友好退出，不甩 traceback。
 
@@ -163,9 +156,9 @@ A 股全市场（`--universe all --resume`）仍在跑：约 10605/16642 次尝�
 
 每条**入选**新闻结构化输出：`so_what` / `priced_in` / `impact` / `counter_view` / `next_check` / `confidence`，并分别标注**事实 / 解读 / 推测**。低价值（纯情绪、旧闻翻炒）只计数，不展开。报告以分析为主体，原文链接放附录。
 
-分析层：有 `ZHIKU_LLM_KEY` 或 `OPENAI_API_KEY` 时走 LLM；没有 key 则规则模板，并标明「未做深度分析」。测试默认无 key。
+新闻/宏观默认只做确定性规则分析，标明「未做深度分析」；不再重复调用独立 LLM。历史统计更新需要显式 `zk news --research`，demo 研究日志隔离。
 
-研判层（`docs/ai_layer.md`）：公式/量化初筛，AI 判断候选前 10。后端 `ZHIKU_LLM_BACKEND=auto|openai|cursor|mock|external`。OpenAI 兼容走 `ZHIKU_LLM_KEY`；Cursor 走 `CURSOR_API_KEY` + `cursor-sdk`（local，失败再 Cloud Agents API）。无 key 时导出 `review-pack.json`，`zk ingest-review` 写回；`zk review-scorecard` 对账 T+5/T+20 超额。结论进 `journal/ai_decisions.jsonl`。密钥不进 git。
+研判层（`docs/ai_layer.md`）：公式/量化初筛，AI 判断候选前 10。后端 `ZHIKU_LLM_BACKEND=auto|openai|cursor|mock|external`。OpenAI 兼容走 `ZHIKU_LLM_KEY`；Cursor 走 `CURSOR_API_KEY` + `cursor-sdk`（local，失败再 Cloud Agents API）。无 key 时导出不可变 review snapshot，`zk ingest-review` 绑定同一证据写回；`zk review-scorecard` 对账 T+5/T+20 超额。结论进 `journal/ai_decisions.jsonl`。密钥不进 git。
 
 ### 信源分级（YAML 可配）
 

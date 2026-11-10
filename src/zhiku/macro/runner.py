@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 
-from zhiku.calendar import now_shanghai, week_bounds
+from zhiku.calendar import calendar_network, now_shanghai, week_bounds
 from zhiku.config import Paths
 from zhiku.engine.rules import RulesSchemaError, load_portfolio
 from zhiku.macro.anchors import snapshots_from_raw
@@ -22,6 +22,7 @@ from zhiku.macro.windows import active_windows, build_windows, window_banner
 from zhiku.models import MissingData
 from zhiku.notify.render import render, write_report
 from zhiku.pipeline.settings import PipelineSettings, load_pipeline_settings
+from zhiku.pipeline.sources import resolve_source_mode
 from zhiku.events.log import DecisionLog
 from zhiku.events.pit import load_asof_universe
 from zhiku.screens.fundamentals import Fundamentals
@@ -46,6 +47,7 @@ class MacroBundle:
     analyses: list[dict] = field(default_factory=list)
     analysis_engine: str = "rules"
     low_value_count: int = 0
+    source_mode: str = "unknown"
 
     def to_json(self) -> str:
         return json.dumps(self.__dict__, ensure_ascii=False, indent=2, default=str)
@@ -112,15 +114,43 @@ def run_macro(
     settings: PipelineSettings | None = None,
     now: datetime | None = None,
 ) -> MacroBundle:
+    """Collect macro context under the provider's calendar network policy."""
     settings = settings or load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
+    mode = resolve_source_mode(provider_kind, enabled=settings.macro.enabled)
+    with calendar_network(enabled=mode == "live"):
+        return _run_macro(paths, on, provider_kind=mode, settings=settings, now=now)
+
+
+def _run_macro(
+    paths: Paths,
+    on: date,
+    *,
+    provider_kind: str = "fixture",
+    settings: PipelineSettings | None = None,
+    now: datetime | None = None,
+) -> MacroBundle:
+    """Collect macro context without launching an independent LLM workflow."""
+    settings = settings or load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
+    source_mode = resolve_source_mode(provider_kind, enabled=settings.macro.enabled)
+    if source_mode == "disabled":
+        return MacroBundle(
+            asof=on.isoformat(),
+            source_mode=source_mode,
+            notes=["宏观源已关闭：未采集宏观信息，也未加载离线样本。"],
+            analysis_engine="disabled",
+        )
     notes: list[str] = []
+    current_snapshot_available = on == now_shanghai().date()
     asof_dt = now_shanghai(now) if now is not None else datetime.combine(on, datetime.min.time())
     asof_dt = now_shanghai(asof_dt)
 
     cal_path = paths.fixtures / "macro_calendar.yaml"
     events: list = []
-    if provider_kind == "live" and settings.macro.enabled:
-        live_events, live_notes = live_calendar(on, horizon_days=settings.macro.horizon_days)
+    if source_mode == "live":
+        try:
+            live_events, live_notes = live_calendar(on, horizon_days=settings.macro.horizon_days)
+        except Exception as exc:  # noqa: BLE001
+            live_events, live_notes = [], [f"缺数据：live 宏观日历失败：{exc}"]
         notes.extend(live_notes)
         events.extend(live_events)
         if live_events:
@@ -129,7 +159,14 @@ def run_macro(
             notes.append("缺数据：live 宏观日历为空，不回退虚构样本。")
         from zhiku.macro.sources import live_anchors
 
-        live_anchor_rows, anchor_notes = live_anchors()
+        if current_snapshot_available:
+            try:
+                live_anchor_rows, anchor_notes = live_anchors()
+            except Exception as exc:  # noqa: BLE001
+                live_anchor_rows, anchor_notes = [], [f"缺数据：live 宏观锚点失败：{exc}"]
+        else:
+            live_anchor_rows = []
+            anchor_notes = ["缺数据：锚定资产源仅提供当前快照，不用于历史/未来报告日。"]
         notes.extend(anchor_notes)
     else:
         events = load_calendar(cal_path)
@@ -138,20 +175,33 @@ def run_macro(
         notes.append("使用离线虚构宏观样本（不访问网络）。")
         live_anchor_rows = []
 
-    attach_surprise(events)
     for ev in events:
         decorate_event(ev)
+        when = to_shanghai(ev.scheduled_at)
+        if when is None or when > asof_dt:
+            # A calendar fetched today may contain outcomes unknown as of this
+            # report. Preserve the schedule/consensus but not future results.
+            ev.actual = None
+            ev.decision = None
+            ev.tone = None
+            ev.scenario = None
+            ev.reactions = {}
+            ev.surprise_z = None
+    attach_surprise(events)
 
     horizon = settings.macro.horizon_days
     future = upcoming(events, asof_dt, days=horizon)
     released = released_on_or_before(events, asof_dt, lookback_days=1)
 
-    if provider_kind == "live":
+    if source_mode == "live":
         history = []
         notes.append("live 宏观历史样本：缺数据，不回落 fixture。")
     else:
-        history = load_history(paths.fixtures / "macro_history.yaml")
-    holdings = _holdings_fundamentals(paths, on, provider_kind=provider_kind)
+        history_rows = load_history(paths.fixtures / "macro_history.yaml")
+        history = [row for row in history_rows if row.released is not None and row.released <= on]
+        if len(history) != len(history_rows):
+            notes.append("宏观历史样本按报告日过滤：跳过未来或缺少发布日期的样本。")
+    holdings = _holdings_fundamentals(paths, on, provider_kind=source_mode)
     if holdings is None:
         notes.append("未找到私有持仓文件，事件剧本不输出持仓暴露。")
     scripts = build_scripts(future, history, holdings)
@@ -165,11 +215,19 @@ def run_macro(
     banners = window_banner(windows, on)
     freeze = any(w.freeze_adds for w in active)
 
-    if provider_kind == "live":
+    if source_mode == "live":
         from zhiku.macro.models import RateExpectation
 
-        if settings.macro.fedwatch_approx:
-            live_rate = live_fedwatch_approx(on, require_env=False)
+        if not current_snapshot_available:
+            rate = RateExpectation(
+                source="缺数据", note="利率期货源仅提供当前快照，不用于历史/未来报告日"
+            )
+            notes.append(rate.note)
+        elif settings.macro.fedwatch_approx:
+            try:
+                live_rate = live_fedwatch_approx(on, require_env=False)
+            except Exception as exc:  # noqa: BLE001
+                live_rate = MissingData(f"live 利率预期失败：{exc}")
             if isinstance(live_rate, MissingData):
                 notes.append(f"利率期货：{live_rate.reason}")
                 rate = RateExpectation(source="缺数据", note=live_rate.reason)
@@ -182,7 +240,7 @@ def run_macro(
         fed_raw = load_yaml(paths.fixtures / "fedwatch.yaml")
         rate = from_fixture(fed_raw)
 
-    if provider_kind == "live":
+    if source_mode == "live":
         anchors = live_anchor_rows
         if not anchors:
             notes.append("缺数据：锚定资产无真实行情。")
@@ -218,7 +276,7 @@ def run_macro(
     if geo.temperature == "缺数据":
         notes.append("地缘风险：缺数据")
 
-    from zhiku.macro.analyze import analyze_event
+    from zhiku.macro.analyze import rule_card
 
     script_by_id = {s["event_id"]: s for s in [_script_dict(x) for x in scripts]}
     chain_note_list = [f"{c['name']}→{','.join(c.get('commodities') or [])}" for c in fired]
@@ -229,7 +287,7 @@ def run_macro(
             low_macro += 1
             continue
         analyses.append(
-            analyze_event(
+            rule_card(
                 ev,
                 on=on,
                 script=script_by_id.get(ev.id),
@@ -240,10 +298,11 @@ def run_macro(
             ).to_dict()
         )
     if analyses and all(not a.get("deep") for a in analyses):
-        notes.append("未配置 LLM key 或分析降级：未做深度分析（规则模板）。")
+        notes.append("宏观分析使用确定性规则，未做深度分析；LLM 统一由候选审核层执行。")
 
     return MacroBundle(
         asof=on.isoformat(),
+        source_mode=source_mode,
         notes=notes,
         calendar_7d=[_event_dict(e) for e in future],
         released=[_event_dict(e) for e in released],

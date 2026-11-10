@@ -284,7 +284,7 @@ def test_report_section_and_fictional_posts(tmp_kb: Path, examples_dir: Path, mo
     monkeypatch.delenv("X_BEARER_TOKEN", raising=False)
     monkeypatch.setenv("ZHIKU_ANALYSIS_LLM", "0")
     paths = Paths.load(kb=tmp_kb, fixtures=examples_dir / "fixtures")
-    bundle = run_news(paths, date(2026, 10, 20), provider_kind="fixture")
+    bundle = run_news(paths, date(2026, 10, 20), provider_kind="fixture", include_research=True)
     assert bundle.kol_feed
     assert any("虚构" in (p.get("headline") or "") or "Fictional" in (p.get("headline") or "") for p in bundle.kol_feed)
     inst = next(p for p in bundle.kol_feed if p["handle"] == "michaeljburry")

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -19,7 +22,8 @@ US_CLOSE = time(16, 0)
 
 logger = logging.getLogger("zhiku.calendar")
 
-_CN_CALENDAR_CACHE: dict[int, set[date]] = {}
+_CN_CALENDAR_CACHE: dict[tuple[int, bool], set[date]] = {}
+_CALENDAR_NETWORK_ALLOWED: ContextVar[bool] = ContextVar("calendar_network_allowed", default=True)
 _CN_CALENDAR_WARNED = False
 
 
@@ -59,18 +63,35 @@ def _weekdays_between(start: date, end: date) -> set[date]:
     return out
 
 
+@contextmanager
+def calendar_network(*, enabled: bool) -> Iterator[None]:
+    """Scope calendar networking without changing process environment variables.
+
+    Live callers still need ``ZHIKU_LIVE_CALENDAR``. An offline parent scope
+    cannot be re-enabled by a nested caller; the previous policy is restored
+    even when the enclosed operation raises.
+    """
+    token = _CALENDAR_NETWORK_ALLOWED.set(_CALENDAR_NETWORK_ALLOWED.get() and enabled)
+    try:
+        yield
+    finally:
+        _CALENDAR_NETWORK_ALLOWED.reset(token)
+
+
 def _want_live_calendar() -> bool:
-    return os.environ.get("ZHIKU_LIVE_CALENDAR", "").lower() in {"1", "true", "yes"}
+    return _CALENDAR_NETWORK_ALLOWED.get() and os.environ.get("ZHIKU_LIVE_CALENDAR", "").lower() in {"1", "true", "yes"}
 
 
 def load_cn_trade_dates(year: int) -> set[date]:
     """A 股交易日：live 模式走 akshare；失败或离线时退化为工作日并警告。"""
     global _CN_CALENDAR_WARNED
-    if year in _CN_CALENDAR_CACHE:
-        return _CN_CALENDAR_CACHE[year]
+    want_live = _want_live_calendar()
+    cache_key = (year, want_live)
+    if cache_key in _CN_CALENDAR_CACHE:
+        return _CN_CALENDAR_CACHE[cache_key]
     start = date(year, 1, 1)
     end = date(year, 12, 31)
-    if _want_live_calendar():
+    if want_live:
         try:
             import akshare as ak
 
@@ -87,7 +108,7 @@ def load_cn_trade_dates(year: int) -> set[date]:
                 if d.year == year:
                     days.add(d)
             if days:
-                _CN_CALENDAR_CACHE[year] = days
+                _CN_CALENDAR_CACHE[cache_key] = days
                 return days
             raise RuntimeError("交易日历为空")
         except Exception as exc:  # noqa: BLE001 — 失败即退化，不让日历拖垮判定
@@ -95,7 +116,7 @@ def load_cn_trade_dates(year: int) -> set[date]:
                 logger.warning("A 股交易日历不可用（%s），退化为工作日", exc)
                 _CN_CALENDAR_WARNED = True
     days = _weekdays_between(start, end)
-    _CN_CALENDAR_CACHE[year] = days
+    _CN_CALENDAR_CACHE[cache_key] = days
     return days
 
 

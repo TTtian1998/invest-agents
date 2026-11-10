@@ -35,7 +35,7 @@ def store_from_paths(paths: Paths) -> MarketStore:
     return MarketStore(paths.data_dir)
 
 
-def resolve_universe_symbols(store: MarketStore, universe: str) -> list[str]:
+def resolve_universe_symbols(store: MarketStore, universe: str, asof: date | None = None) -> list[str]:
     key = (universe or "csi800").lower()
     if key == "all":
         df = store.listings(market="CN")
@@ -44,9 +44,11 @@ def resolve_universe_symbols(store: MarketStore, universe: str) -> list[str]:
         return [s for s in df["symbol"].tolist() if not is_cn_etf(str(s))]
     code = INDEX_ALIAS.get(key, key)
     if code:
-        members = store.index_symbols(code)
+        members = store.index_symbols_asof(code, asof) if asof is not None else store.index_symbols(code)
         if members:
             return members
+        if asof is not None:
+            return []  # No current-membership/all-listings fallback for a missing PIT index.
     df = store.listings()
     return [] if df.empty else list(df["symbol"].tolist())
 
@@ -58,10 +60,12 @@ def _listing_map(store: MarketStore) -> dict[str, dict[str, Any]]:
     return {str(r["symbol"]): r.to_dict() for _, r in df.iterrows()}
 
 
-def _spot_map(store: MarketStore, asof: date) -> dict[str, dict[str, Any]]:
+def _spot_map(store: MarketStore, asof: date, max_age_days: int = 7) -> dict[str, dict[str, Any]]:
     df = store.latest_spot(asof)
     if df.empty:
         return {}
+    dates = pd.to_datetime(df["asof"], errors="coerce")
+    df = df[(dates <= pd.Timestamp(asof)) & (dates >= pd.Timestamp(asof - timedelta(days=max_age_days)))]
     return {str(r["symbol"]): r.to_dict() for _, r in df.iterrows()}
 
 
@@ -89,18 +93,20 @@ def build_fundamentals(
     *,
     universe: str = "csi800",
     extra: list[str] | None = None,
+    max_spot_age_days: int = 7,
 ) -> tuple[list[Fundamentals], dict[str, date], list[str]]:
     notes: list[str] = []
     if store.is_empty():
         return [], {}, ["本地库为空，请先 zk data sync"]
-    symbols = resolve_universe_symbols(store, universe)
+    symbols = resolve_universe_symbols(store, universe, asof)
     for s in extra or []:
         if s not in symbols:
             symbols.append(s)
     delist = store.delist_map()
     symbols = universe_with_delist(symbols, delist, asof)
     listings = _listing_map(store)
-    spots = _spot_map(store, asof)
+    spots = _spot_map(store, asof, max_spot_age_days)
+    notes.append(f"估值截面只接受 {max_spot_age_days} 天内 asof；过期记录不冒充今日估值。")
     start = asof - timedelta(days=400)
     bars = store.bars(symbols, start=start, end=asof, adjust="qfq")
     raw_bars = store.bars(symbols, start=asof - timedelta(days=40), end=asof, adjust="none")

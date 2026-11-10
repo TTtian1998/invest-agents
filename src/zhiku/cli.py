@@ -25,6 +25,7 @@ app = typer.Typer(
     help="投资智库 zhiku：选股打分、回测、AI 审核、看板，以及触发线纪律。不接券商、不下单。",
 )
 factor_app = typer.Typer(add_completion=False, help="qlib 因子准备 / 训练 / 预测（可选 extra）。")
+research_app = typer.Typer(add_completion=False, help="历史验收 / 显式发布，与 daily 分离。")
 data_app = typer.Typer(add_completion=False, help="全市场数据同步到 ZHIKU_KB/data（不进 git）。")
 
 
@@ -44,7 +45,7 @@ def _parse_date(text: str | None) -> date:
 
 def _make_provider(kind: str, paths: Paths):
     kind = kind.lower()
-    if kind == "fixture":
+    if kind in {"fixture", "demo"}:
         from zhiku.data.fixture import FixtureProvider
 
         return FixtureProvider(paths.fixtures)
@@ -56,7 +57,7 @@ def _make_provider(kind: str, paths: Paths):
 
         cache = SQLiteCache(paths.cache)
         return LiveProvider(AShareProvider(cache=cache), GlobalProvider())
-    _die("未知 --provider，可选 live 或 fixture")
+    _die("此命令需要行情源 live 或 demo（fixture 是兼容别名）")
 
 
 def _latest_quotes(provider, symbols: list[str], on: date | None):
@@ -83,7 +84,7 @@ def main(
     provider: str = typer.Option(
         "live",
         "--provider",
-        help="行情源：live=akshare/yfinance；fixture=examples/fixtures 离线 CSV",
+        help="数据源：live / demo（离线）；fixture=demo 兼容别名；disabled=停用流水线来源",
     ),
     kb: Optional[Path] = typer.Option(None, "--kb", help="覆盖 ZHIKU_KB"),
     fixtures: Optional[Path] = typer.Option(None, "--fixtures", help="覆盖 ZHIKU_FIXTURES"),
@@ -91,7 +92,19 @@ def main(
     ctx.ensure_object(dict)
     paths = Paths.load(kb=kb, fixtures=fixtures)
     ctx.obj["paths"] = paths
-    ctx.obj["provider_kind"] = provider
+    from zhiku.pipeline.sources import resolve_source_mode
+    try:
+        mode = resolve_source_mode(provider)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    from zhiku.pipeline.sources import claim_source_mode
+    from zhiku.calendar import calendar_network
+    try:
+        claim_source_mode(paths.kb, mode)
+    except (ValueError, OSError) as exc:
+        _die(str(exc))
+    ctx.with_resource(calendar_network(enabled=mode == "live"))
+    ctx.obj["provider_kind"] = "fixture" if mode == "demo" else mode
     ctx.obj["provider"] = None
     if provider == "live":
         os.environ.setdefault("ZHIKU_LIVE_CALENDAR", "1")
@@ -291,7 +304,7 @@ def review_cmd(
         script_hits = macro.script_hits
         news = run_news(paths, end, provider_kind=ctx.obj["provider_kind"], macro_bundle=macro)
         source_hits = news.source_hits or {}
-        if ctx.obj["provider_kind"] != "live" and not source_hits:
+        if ctx.obj["provider_kind"] == "fixture" and not source_hits:
             source_hits = source_hitrate(load_followups(paths.fixtures / "news.yaml"))
         x_hits = news.x_hits or {}
         crowding_stats = news.crowding_stats or {}
@@ -351,6 +364,8 @@ def backtest_cmd(
     screen: str = typer.Argument(..., help="公式名，或 trigger 回测触发线"),
 ) -> None:
     """对选股公式做月度等权回测；`trigger` 回测跌破价位线。live 用本地库价格。"""
+    if ctx.obj["provider_kind"] == "disabled":
+        _die("数据源 disabled，不能运行需要价格的回测；请显式选择 live 或 demo。")
     from zhiku.backtest.engine import (
         backtest_screen,
         backtest_trigger_line,
@@ -421,7 +436,7 @@ def daily_cmd(
     ctx: typer.Context,
     date_text: Optional[str] = typer.Option(None, "--date", help="截面日 YYYY-MM-DD"),
 ) -> None:
-    """一键：选股 → 打分 → 回测闸门 → AI 审核 → markdown/HTML/JSON。可配 cron。"""
+    """每日执行：读已发布验收/模型 → 正式候选/研究观察 → 单次 AI 审核 → 报告。"""
     from zhiku.pipeline.daily import run_daily, write_daily_reports
 
     paths: Paths = ctx.obj["paths"]
@@ -441,7 +456,7 @@ def run_daily_cmd(
     date_text: Optional[str] = typer.Option(None, "--date", help="截面日 YYYY-MM-DD"),
     force: bool = typer.Option(False, "--force", help="非交易日也跑"),
     skip_sync: bool = typer.Option(False, "--skip-sync"),
-    skip_train: bool = typer.Option(False, "--skip-train"),
+    skip_train: bool = typer.Option(False, "--skip-train", help="已弃用兼容参数；daily 永不自动训练"),
 ) -> None:
     """一条命令：增量同步 → 新闻宏观 → daily → 精简摘要。非交易日退出 0。"""
     import time
@@ -449,7 +464,6 @@ def run_daily_cmd(
     from zhiku.calendar import is_trading_day
     from zhiku.data.store import MarketStore
     from zhiku.data.sync import sync_market
-    from zhiku.factors.qlib_adapter import needs_retrain, prepare_from_store, train_and_select
     from zhiku.models import Market
     from zhiku.pipeline.daily import run_daily, write_daily_reports
     from zhiku.pipeline.settings import load_pipeline_settings
@@ -464,7 +478,7 @@ def run_daily_cmd(
     timings: dict[str, float] = {}
     t_all = time.monotonic()
     store = MarketStore(paths.data_dir)
-    if not skip_sync:
+    if not skip_sync and ctx.obj["provider_kind"] == "live":
         t0 = time.monotonic()
         typer.echo("== 增量同步 ==", err=True)
         report = sync_market(
@@ -485,30 +499,19 @@ def run_daily_cmd(
         )
         timings["sync"] = time.monotonic() - t0
         typer.echo(report.summary(), err=True)
-    if not skip_train:
-        t0 = time.monotonic()
-        meta = __import__("zhiku.factors.qlib_adapter", fromlist=["model_status"]).model_status(
-            paths.models_dir
-        )
-        if needs_retrain(meta, on):
-            typer.echo("== 月度重训 ==", err=True)
-            try:
-                prepare_from_store(store, paths.data_dir / "qlib")
-                train_and_select(qlib_dir=paths.data_dir / "qlib", models_dir=paths.models_dir, store=store)
-            except Exception as exc:  # noqa: BLE001
-                typer.echo(f"训练跳过：{exc}", err=True)
-        else:
-            typer.echo(f"模型本月已训 {meta.get('trained_on')}，跳过重训", err=True)
-        timings["train"] = time.monotonic() - t0
+    if skip_train:
+        typer.echo("--skip-train 已弃用：daily 不训练；请显式运行 factor train / factor publish。", err=True)
+    if ctx.obj["provider_kind"] != "live":
+        typer.echo("离线/停用模式：不做 live 数据同步。", err=True)
     t0 = time.monotonic()
     typer.echo("== daily ==", err=True)
     daily = run_daily(paths, on, provider_kind=ctx.obj["provider_kind"])
-    written = write_daily_reports(paths, on, daily)
     timings["daily"] = time.monotonic() - t0
     timings["total"] = time.monotonic() - t_all
     for key, sec in timings.items():
         typer.echo(f"耗时 {key}={sec:.1f}s", err=True)
         daily.notes.append(f"耗时 {key}={sec:.1f}s")
+    written = write_daily_reports(paths, on, daily)
     brief = next((p for p in written if p.name.endswith("zk-brief.md")), None)
     if brief is not None:
         typer.echo(brief.read_text(encoding="utf-8"))
@@ -560,6 +563,8 @@ def factor_prepare(
     if not store.is_empty():
         typer.echo(prepare_from_store(store, dest))
         return
+    if ctx.obj["provider_kind"] != "fixture":
+        _die("本地库无日线；live/disabled 不回退 fixture，请先 data sync。")
     try:
         msg = prepare_from_csv(paths.fixtures, dest)
     except FileNotFoundError as exc:
@@ -574,7 +579,7 @@ def factor_train(
     qlib_dir: Optional[Path] = typer.Option(None, "--qlib-dir"),
     model: Optional[Path] = typer.Option(None, "--model"),
 ) -> None:
-    """训练 Alpha158 + LightGBM（pyqlib 失败则 pandas+LightGBM）。"""
+    """生成研究模型并明确实际实现；不会发布到 daily。"""
     from zhiku.data.store import MarketStore
     from zhiku.factors.qlib_adapter import QlibNotInstalled, train_and_select
 
@@ -582,13 +587,18 @@ def factor_train(
     paths.ensure_runtime_dirs()
     dest = qlib_dir or (paths.data_dir / "qlib")
     store = MarketStore(paths.data_dir)
-    del model  # 对比训练写入 models/selected.pkl
+    if model is not None:
+        _die("--model 不再被忽略：train 输出研究候选；请用 factor publish PATH 显式发布。")
     try:
 
-        winner = train_and_select(qlib_dir=dest, models_dir=paths.models_dir, store=store)
+        from zhiku.pipeline.artifacts import config_fingerprint
+        from zhiku.pipeline.settings import load_pipeline_settings
+        settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
+        winner = train_and_select(qlib_dir=dest, models_dir=paths.models_dir, store=store,
+            provider_kind=ctx.obj["provider_kind"], config_fingerprint=config_fingerprint(settings))
         msg = (
-            f"已训练并选定 {winner.get('kind')}；"
-            f"IC={winner.get('ic')} RankIC={winner.get('rank_ic')} ICIR={winner.get('icir')}"
+            f"研究训练完成（尚未发布）：{winner.get('kind')}；"
+            f"IC={winner.get('ic')} RankIC={winner.get('rank_ic')} ICIR={winner.get('icir')}；产物={winner.get('path')}"
         )
     except QlibNotInstalled as exc:
         typer.echo(str(exc), err=True)
@@ -691,24 +701,67 @@ def factor_style_attrib(
     )
 
 
-@factor_app.command("predict")
-def factor_predict(ctx: typer.Context) -> None:
-    """输出 qlib 分数；未训练则空结果并提示。"""
-    from zhiku.data.store import MarketStore
-    from zhiku.factors.qlib_adapter import model_status, predict_scores, qlib_available
-
+@factor_app.command("publish")
+def factor_publish(
+    ctx: typer.Context,
+    model_path: Path = typer.Argument(..., exists=True, readable=True),
+    date_text: Optional[str] = typer.Option(None, "--date"),
+) -> None:
+    """验证并发布指定研究模型版本；失败保留上个有效发布。"""
+    from zhiku.factors.qlib_adapter import publish_model
+    from zhiku.pipeline.artifacts import config_fingerprint
+    from zhiku.pipeline.settings import load_pipeline_settings
     paths: Paths = ctx.obj["paths"]
-    meta = model_status(paths.models_dir)
-    if meta.get("status") == "未训练":
-        typer.echo("未训练。请先 zk data sync && zk factor prepare && zk factor train。", err=True)
-        if not qlib_available():
-            from zhiku.factors.qlib_adapter import QLIB_HINT
+    settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
+    try:
+        result = publish_model(paths.models_dir, model_path, asof=_parse_date(date_text),
+            provider_kind=ctx.obj["provider_kind"], config_fingerprint=config_fingerprint(settings),
+            max_age_days=settings.artifacts.model_max_age_days)
+    except (ValueError, OSError, TypeError) as exc:
+        _die(f"模型发布被拒绝：{exc}")
+    typer.echo(result)
 
-            typer.echo(QLIB_HINT.strip(), err=True)
-        raise typer.Exit(0)
+
+@factor_app.command("predict")
+def factor_predict(ctx: typer.Context, date_text: Optional[str] = typer.Option(None, "--date")) -> None:
+    """只用兼容且未过期的已发布模型预测，不自动选择研究文件。"""
+    from zhiku.data.store import MarketStore
+    from zhiku.factors.qlib_adapter import predict_published_scores
+    from zhiku.pipeline.artifacts import config_fingerprint
+    from zhiku.pipeline.settings import load_pipeline_settings
+    paths: Paths = ctx.obj["paths"]
+    settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
+    on = _parse_date(date_text)
+    context = config_fingerprint(settings)
     store = MarketStore(paths.data_dir)
-    scores = predict_scores(None, None, store=store, models_dir=paths.models_dir)
+    scores, meta = predict_published_scores(paths.models_dir, store=store, asof=on, provider_kind=ctx.obj["provider_kind"], config_fingerprint=context, max_age_days=settings.artifacts.model_max_age_days)
+    if not meta.get("available"):
+        typer.echo(f"模型不可用：{meta.get('reason')}。先训练/验证，再 factor publish PATH。", err=True)
+        raise typer.Exit(0)
     typer.echo(scores or "{}")
+
+
+@research_app.command("gates")
+def research_gates(ctx: typer.Context, date_text: Optional[str] = typer.Option(None, "--date")) -> None:
+    """从本地时点历史计算公式验收证据，不联网、不发布。"""
+    from zhiku.pipeline.research import evaluate_gates
+    paths: Paths = ctx.obj["paths"]
+    paths.ensure_runtime_dirs()
+    typer.echo(str(evaluate_gates(paths, _parse_date(date_text), provider_kind=ctx.obj["provider_kind"])))
+
+
+@research_app.command("publish-gates")
+def publish_gates(ctx: typer.Context, path: Path = typer.Argument(..., exists=True, readable=True), date_text: Optional[str] = typer.Option(None, "--date")) -> None:
+    """重验完整证据并发布公式准入版本；不接受裸 passed=true。"""
+    from zhiku.pipeline.artifacts import publish_gate_research
+    from zhiku.pipeline.settings import load_pipeline_settings
+    paths: Paths = ctx.obj["paths"]
+    settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
+    try:
+        result = publish_gate_research(paths, path, on=_parse_date(date_text), provider_kind=ctx.obj["provider_kind"], settings=settings)
+    except (ValueError, OSError, TypeError, KeyError) as exc:
+        _die(f"公式发布被拒绝：{exc}")
+    typer.echo(result)
 
 
 @app.command("news")
@@ -716,15 +769,16 @@ def news_cmd(
     ctx: typer.Context,
     kind: str = typer.Option("all", "--kind", help="all / premarket-ah / premarket-us / midday"),
     date_text: Optional[str] = typer.Option(None, "--date"),
+    research: bool = typer.Option(False, "--research", help="显式重算新闻/X 历史统计"),
 ) -> None:
-    """新闻雷达：分析为主体，原文链接附后。无 LLM key 时规则模板降级。"""
+    """新闻雷达：确定性分析；--research 显式更新历史统计/权重。"""
     from zhiku.news.runner import run_news, write_news_reports
 
     paths: Paths = ctx.obj["paths"]
     paths.ensure_runtime_dirs()
     on = _parse_date(date_text)
     bundle = run_news(
-        paths, on, kind=kind.replace("-", "_"), provider_kind=ctx.obj["provider_kind"]
+        paths, on, kind=kind.replace("-", "_"), provider_kind=ctx.obj["provider_kind"], include_research=research
     )
     written = write_news_reports(paths, on, bundle)
     md = next((p for p in written if p.suffix == ".md"), None)
@@ -760,30 +814,14 @@ def export_review_cmd(
     date_text: Optional[str] = typer.Option(None, "--date"),
 ) -> None:
     """导出外部研判任务包（候选、截面、新闻摘录、大师清单）。"""
-    from zhiku.ai.pack import build_review_pack, write_review_pack
-    from zhiku.pipeline.daily import run_daily
-    from zhiku.pipeline.settings import load_pipeline_settings
-
+    from zhiku.ai.pack import load_review_snapshot
     paths: Paths = ctx.obj["paths"]
-    paths.ensure_runtime_dirs()
     on = _parse_date(date_text)
-    settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
-    daily = run_daily(paths, on, provider_kind=ctx.obj["provider_kind"])
-    from zhiku.pipeline.universe import load_pipeline_universe
-
-    rows, _, _ = load_pipeline_universe(paths, on, provider_kind=ctx.obj["provider_kind"], settings=settings)
-    pack = build_review_pack(
-        asof=on,
-        candidates=daily.candidates,
-        rows=rows,
-        masters=settings.ai.masters,
-        news=daily.news,
-        macro=daily.macro,
-        judge_n=settings.ai.judge_n,
-    )
-    dest = paths.reports / f"{on.isoformat()}-review-pack.json"
-    write_review_pack(dest, pack)
-    typer.echo(str(dest))
+    try:
+        pack = load_review_snapshot(paths.reports, asof=on.isoformat())
+    except (ValueError, OSError, KeyError) as exc:
+        _die(f"没有可导出的有效快照，请先运行 daily：{exc}")
+    typer.echo(str(paths.reports / "review-snapshots" / f"{pack['snapshot_id']}.json"))
 
 
 @app.command("ingest-review")
@@ -793,15 +831,26 @@ def ingest_review_cmd(
 ) -> None:
     """把外部研判结果写入决策日志。"""
     from zhiku.ai.journal import DecisionJournal
-    from zhiku.ai.pack import load_review_result
+    from zhiku.ai.pack import load_review_result, load_review_snapshot, validate_review_result
 
     paths: Paths = ctx.obj["paths"]
     paths.ensure_runtime_dirs()
-    result = load_review_result(path)
-    n = DecisionJournal(paths.journal / "ai_decisions.jsonl").append_result(
-        result, available={"source": str(path)}
-    )
-    typer.echo(f"写入 {n} 条决策日志（asof={result.asof} backend={result.backend}）")
+    try:
+        result = load_review_result(path)
+        pack = load_review_snapshot(paths.reports, asof=result.asof, snapshot_id=result.snapshot_id)
+        result = validate_review_result(result, pack)
+    except (ValueError, OSError, KeyError) as exc:
+        _die(f"研判结果被拒绝：{exc}")
+    try:
+        n = DecisionJournal(paths.journal / "ai_decisions.jsonl").append_result(
+            result, pack=pack, available={"source": str(path)}
+        )
+    except ValueError as exc:
+        _die(f"研判写入被拒绝：{exc}")
+    from zhiku.pipeline.daily import apply_review_to_daily
+    rendered = apply_review_to_daily(paths, result)
+    typer.echo(f"写入 {n} 条决策日志（asof={result.asof} backend={result.backend}）；" +
+               ("已更新匹配快照日报（未重跑 daily）" if rendered else "无当前匹配日报，保留历史决策"))
 
 
 @app.command("review-scorecard")
@@ -822,7 +871,7 @@ def review_scorecard_cmd(
 
         store = MarketStore(paths.data_dir)
         prices = load_price_panel_from_store(store)
-    else:
+    elif ctx.obj["provider_kind"] == "fixture":
         csv = paths.fixtures / "monthly_prices.csv"
         if csv.is_file():
             prices = load_price_panel(csv)
@@ -868,6 +917,8 @@ def data_sync(
     hist_fin: Optional[bool] = typer.Option(None, "--hist-fin/--skip-hist-fin", help="补历史季报/分红/预告"),
 ) -> None:
     """增量同步 A 股列表/成分/日线/财报到 ZHIKU_KB/data。可断点续传。"""
+    if ctx.obj["provider_kind"] != "live":
+        _die("data sync 仅支持 live；demo/disabled 不连接实时行情源。")
     from zhiku.data.store import MarketStore
     from zhiku.data.sync import sync_market
     from zhiku.pipeline.settings import load_pipeline_settings
@@ -903,6 +954,7 @@ def data_sync(
 
 app.add_typer(factor_app, name="factor")
 app.add_typer(data_app, name="data")
+app.add_typer(research_app, name="research")
 
 
 def run() -> None:

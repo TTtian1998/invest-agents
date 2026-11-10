@@ -77,10 +77,16 @@
 无
 {% endif %}
 
-## qlib 因子
+## 发布与来源
+{% set ga = daily.gate_artifact or {} %}
+- 数据模式：{{ daily.source_mode or "unknown" }}
+- 公式验收：{{ ga.status or "unavailable" }} / {{ ga.reason or "not_published" }}
+- 公式版本：{{ ga.version or "无" }}；daily 不重算历史验证。
+
+## 量化辅助模型
 {% set q = daily.qlib if daily.qlib is defined and daily.qlib else {} %}
 {% set mw = daily.merge_weights if daily.merge_weights is defined and daily.merge_weights else {} %}
-- 状态：{{ q.status or "未训练" }}
+- 状态：{{ q.status or "未训练" }} / {{ q.reason or "" }}；实际实现 {{ q.kind or "无" }}；发布版本 {{ q.version or "无" }}
 - 训练日期：{{ q.trained_on or "未训练" }}
 - IC：{{ q.ic if q.ic is not none else "缺数据" }}；RankIC：{{ q.rank_ic if q.rank_ic is not none else "缺数据" }}；RankICIR：{{ q.rank_icir if q.rank_icir is not none else (q.icir if q.icir is not none else "缺数据") }}
 - 量化分权重：{{ mw.qlib_weight_effective if mw.qlib_weight_effective is not none else 0.10 }}（公式 {{ mw.formula_weight if mw.formula_weight is not none else 0.90 }}；上限 {{ mw.qlib_weight_cap if mw.qlib_weight_cap is not none else 0.40 }}）
@@ -98,7 +104,7 @@
 - 回测股票池：{{ pit.label or "未标时点池" }}
 {% endif %}
 
-## 今日候选（公式分{% if daily.candidates and daily.candidates[0].qlib_score is not none %} + qlib{% endif %}）
+## 正式候选（公式分{% if daily.candidates and daily.candidates[0].qlib_score is not none %} + qlib{% endif %}）
 
 {% for c in daily.candidates %}
 - **{{ c.symbol }}** {{ c.name }} 总分 {{ "%.1f"|format(c.total) }}（公式 {{ "%.1f"|format(c.formula_score) }}{% if c.qlib_score is not none %} / qlib {{ "%.1f"|format(c.qlib_score) }}{% endif %} / 来源 {{ c.source }}）
@@ -108,7 +114,15 @@
 今日无候选（可能全部未过优质门槛或回测闸门）。
 {% endif %}
 
-## 各公式榜单
+## 研究观察（不是正式候选）
+{% for c in (daily.observations or [])[:20] %}
+- {{ c.symbol }} {{ c.name }}：公式 {{ "%.1f"|format(c.formula_score or 0) }}；{{ "符合已发布公式" if c.eligible else "未通过正式准入" }}。仅研究展示，不用量化分绕过闸门。
+{% endfor %}
+{% if not daily.observations %}
+无。
+{% endif %}
+
+## 各公式榜单（研究）
 {% for name, rows in daily.screens.items() %}
 ### {{ name }}{% if daily.insufficient is defined and name in daily.insufficient %}（数据不足，未进候选）{% elif name in daily.gated_out %}（回测未过闸，未进候选）{% endif %}
 {% for r in rows %}
@@ -154,7 +168,7 @@
 待外部研判写回（zk ingest-review）。
 {% endif %}
 
-## AI 审核
+## 确定性规则清单
 {% for a in daily.audits %}
 ### {{ a.symbol }} {{ a.name }} — {{ a.conclusion }}
 {% if a.skip_reason %}

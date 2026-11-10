@@ -1,24 +1,18 @@
-"""zk daily：选股 → 打分 → 回测闸门 → AI 审核 → 报告。"""
+"""Daily execution: current data + approved artifacts, never historical research."""
 
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from pathlib import Path
 
-from zhiku.backtest.engine import (
-    attach_benchmarks,
-    compute_benchmarks,
-    crosscheck_public_index,
-    finalize_gate,
-    load_price_panel,
-    load_price_panel_from_store,
-)
 from zhiku.config import Paths
-from zhiku.events.pit import drop_survivors, load_delist_map
-from zhiku.factors.merge import load_forward_rank_ic, merge_scores, scale_merge_settings
-from zhiku.factors.qlib_adapter import model_status, predict_scores, qlib_available
+from zhiku.factors.merge import merge_scores, scale_merge_settings
+from zhiku.factors.qlib_adapter import predict_published_scores
+from zhiku.pipeline.artifacts import config_fingerprint, fingerprint, load_approved_gates
+from zhiku.pipeline.sources import claim_source_mode
 from zhiku.notify.render import render, write_report
 from zhiku.pipeline.settings import load_pipeline_settings
 from zhiku.pipeline.universe import fundamentals_path, load_pipeline_universe
@@ -49,6 +43,10 @@ class DailyResult:
     merge_weights: dict = field(default_factory=dict)
     ai_layer: dict = field(default_factory=dict)
     review_pack: str | None = None
+    source_mode: str = "demo"
+    snapshot_id: str = ""
+    gate_artifact: dict = field(default_factory=dict)
+    observations: list[dict] = field(default_factory=list)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False, indent=2)
@@ -65,6 +63,7 @@ def run_daily(
     provider_kind: str = "fixture",
     screen_names: list[str] | None = None,
 ) -> DailyResult:
+    mode = claim_source_mode(paths.kb, provider_kind)
     settings = load_pipeline_settings(paths.kb / "config" / "pipeline.yaml")
     rows, delist, uni_notes = load_pipeline_universe(
         paths, on, provider_kind=provider_kind, settings=settings
@@ -72,238 +71,87 @@ def run_daily(
     names = {r.symbol: r.name for r in rows}
     bundle = run_screens(rows, settings, names=screen_names)
     notes: list[str] = list(uni_notes)
-    qlib_meta = model_status(paths.models_dir)
-    if qlib_meta.get("status") == "未训练":
-        notes.append("qlib 因子：未训练。总分仅使用公式分。")
-    elif not qlib_available() and qlib_meta.get("kind") not in {"lgb_lite", "lgb_panel", "zscore_panel"}:
-        notes.append("未安装 [qlib]，若本地已有 LightGBM / 面板模型仍会出分。")
+    if mode != "live" and settings.ai.backend not in {"external", "mock"}:
+        settings.ai.backend = "external"
+        notes.append("离线/停用模式：AI 只导出任务包，不自动调用网络后端。")
+    context = config_fingerprint(settings)
     store = None
-    if provider_kind == "live":
+    if mode == "live":
         from zhiku.data.store import MarketStore
-
         store = MarketStore(paths.data_dir)
-    qlib_scores = predict_scores(
-        None,
-        None,
-        store=store,
-        asof=on,
+    qlib_scores, qlib_meta = predict_published_scores(paths.models_dir, store=store, asof=on,
         symbols=[r.symbol for r in rows],
-        models_dir=paths.models_dir,
-    )
-    if qlib_scores:
-        notes.append(
-            f"qlib 模型 {qlib_meta.get('trained_on') or '未知日期'}；"
-            f"IC={qlib_meta.get('ic')} RankIC={qlib_meta.get('rank_ic')}"
-        )
-
-    result = DailyResult(asof=on.isoformat(), fictional=provider_kind != "live")
+        provider_kind=mode, config_fingerprint=context,
+        max_age_days=settings.artifacts.model_max_age_days)
+    qlib_meta["inference_available"] = bool(qlib_scores)
+    if not qlib_scores and qlib_meta.get("available"):
+        qlib_meta["inference_reason"] = "no_current_features_or_scores"
+    if not qlib_scores:
+        notes.append(f"量化辅助不可用：{qlib_meta.get('inference_reason') or qlib_meta.get('reason') or qlib_meta.get('status')}；不自动训练或回退其他模型。")
+    result = DailyResult(asof=on.isoformat(), fictional=mode != "live", source_mode=mode)
     result.universe_size = len(rows)
-    cmp_path = paths.models_dir / "comparison.json"
-    if cmp_path.is_file():
-        try:
-            qlib_meta = dict(qlib_meta)
-            qlib_meta["comparison"] = json.loads(cmp_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            pass
     result.qlib = qlib_meta
     result.quality_passed = bundle.quality_passed
-    result.quality_rejected = [
-        {"symbol": q.symbol, "reasons": q.reasons} for q in bundle.quality if not q.passed
-    ]
+    result.quality_rejected = [{"symbol": q.symbol, "reasons": q.reasons} for q in bundle.quality if not q.passed]
     from zhiku.data.compute import missing_ratio as _miss
-
     result.missing_ratio = _miss(rows) if rows else None
     if result.missing_ratio is not None:
         notes.append(f"截面缺数据比例 {result.missing_ratio:.1%}")
 
-    prices = None
-    limit_up = limit_down = None
     live_prices: dict[str, float] = {}
-    pit = None
-    if provider_kind == "live" and store is not None and not store.is_empty():
-        bench_syms = [
-            s
-            for s in dict.fromkeys(
-                [settings.backtest.benchmark, *list(settings.backtest.benchmark_symbols or [])]
-            )
-            if s and s not in {"universe_ew", "csi300", "csi800"}
-        ]
-        from zhiku.data.fetchers import AkshareFetcher
-        from zhiku.backtest.universe import build_pit_universe
+    fresh_spots: set[str] = set()
+    if store is not None and rows:
+        from datetime import timedelta
+        from zhiku.data.universe_live import _spot_map
+        fresh_spots = set(_spot_map(store, on, settings.artifacts.price_max_age_days))
+        bars = store.bars([r.symbol for r in rows], start=on - timedelta(days=settings.artifacts.price_max_age_days), end=on, adjust="none")
+        if not bars.empty:
+            for symbol, part in bars.groupby("symbol"):
+                close = part.sort_values("date").iloc[-1].get("close")
+                try:
+                    valid_close = float(close)
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(valid_close) and valid_close > 0:
+                    live_prices[str(symbol)] = valid_close
 
-        pit = build_pit_universe(
-            store,
-            asof=on,
-            years=settings.data.years,
-            universe=settings.data.universe,
-            fetcher=AkshareFetcher(),
-            allow_fetch=True,
-        )
-        result.pit_universe = pit.to_dict()
-        notes.extend(pit.notes)
-        want = list(dict.fromkeys([r.symbol for r in rows] + pit.all_symbols + bench_syms))
-        prices = load_price_panel_from_store(store, want)
-        limit_up, limit_down = store.limit_panels(list(prices.columns) if not prices.empty else [])
-        if delist and prices is not None and not prices.empty:
-            prices = drop_survivors(prices, delist, on)
-            notes.append("价格面板来自本地库（前复权），已按退市日截断；末日复权混入已清洗。")
-        if prices is None or prices.empty:
-            notes.append("本地库缺日线，跳过回测闸门。请先 zk data sync。")
-            prices = None
-        notes.extend(crosscheck_public_index(store, on))
-        for r in rows:
-            bar = store.last_bar(r.symbol, "none") or store.last_bar(r.symbol, "qfq")
-            if bar and bar.get("close") is not None:
-                live_prices[r.symbol] = float(bar["close"])
+    acceptance, gate_info = load_approved_gates(paths, on=on, provider_kind=mode, settings=settings)
+    result.gate_artifact = gate_info
+    backtests = acceptance.get("backtests", {})
+    result.pit_universe = acceptance.get("provenance", {}).get("universe", {})
+    statuses = gate_info.get("statuses", {})
+    approved = set(gate_info["approved_screens"])
+    active_screens = {name: values for name, values in bundle.screens.items() if name in approved}
+    gated = [name for name in bundle.screens if statuses.get(name) == "failed"]
+    insufficient = [name for name in bundle.screens if name not in approved and name not in gated]
+    if not approved:
+        notes.append(f"正式候选关闭：公式验收 {gate_info['reason']}。请运行 zk research gates 后显式 publish-gates；研究观察不代表过闸。")
     else:
-        if not delist:
-            delist = load_delist_map(paths.fixtures / "delisted.yaml")
-        price_file = paths.fixtures / "monthly_prices.csv"
-        if price_file.is_file():
-            prices = load_price_panel(price_file)
-            if delist:
-                prices = drop_survivors(prices, delist, on)
-                notes.append("价格面板已按退市日截断，避免幸存者偏差。")
-
-    active_screens = dict(bundle.screens)
-    gated: list[str] = []
-    insufficient: list[str] = []
-    backtests: dict[str, dict] = {}
-    benches: dict = {}
-    membership = pit.membership if pit is not None else None
-    universe_note = pit.label if pit is not None else None
-    if prices is not None:
-        benches = compute_benchmarks(
-            prices,
-            settings.backtest,
-            membership=membership,
-            universe_note=universe_note,
-        )
-        for bname, bres in benches.items():
-            payload = bres.to_dict()
-            if bname in {"universe_ew", "csi300", "csi800"}:
-                payload["gate_status"] = "对照"
-            backtests[bname] = payload
-        if benches.get("universe_ew") and (benches.get("csi300") or benches.get("csi800")):
-            probe = attach_benchmarks(
-                benches["universe_ew"],
-                benches,
-                sanity_max_ann_gap=settings.backtest.sanity_max_ann_gap,
-            )
-            if probe.sanity_note:
-                notes.append(probe.sanity_note)
-            if probe.sanity_ok is False:
-                notes.append("同池等权与指数年化差超过阈值，请对照时点池口径，勿与静态今日成分混读。")
-        pit_results = None
-        if provider_kind == "live" and store is not None and membership is not None:
-            try:
-                from zhiku.backtest.pit_gate import evaluate_screens, load_statement_cache
-
-                from zhiku.backtest.engine import sanitize_mixed_adjust
-
-                opens = store.price_panel(list(prices.columns), field="open")
-                raw_px = store.price_panel(list(prices.columns), adjust="none", field="close")
-                amt_px = store.price_panel(list(prices.columns), field="amount")
-                if opens is not None and not opens.empty:
-                    opens = sanitize_mixed_adjust(opens, raw_px)
-                    opens = opens.reindex(prices.index)
-                cache = load_statement_cache(store, list(pit.all_symbols) if pit is not None else None)
-                pit_results = evaluate_screens(
-                    settings,
-                    close=prices,
-                    membership=membership,
-                    opens=opens,
-                    raw_close=raw_px,
-                    amounts=amt_px,
-                    limit_up=limit_up,
-                    limit_down=limit_down,
-                    cache=cache,
-                    names=list(bundle.screens),
-                )
-                notes.append(
-                    "闸门：每月时点重算名单（T 日及之前已公告数据），禁止今日静态名单；"
-                    "T+1 开盘成交，涨停买不进；覆盖月数≥80% 后才看超额>0、Sharpe≥等权、前后半段超额都>0。"
-                    "对照行同池等权是闸门实际使用的 T+1 开盘等权。"
-                )
-            except Exception as exc:  # noqa: BLE001
-                notes.append(f"时点闸门失败，不回退今日静态名单（该口径前视）：{exc}")
-                pit_results = None
-        gate_benches = dict(benches)
-        if pit_results and pit_results.get("universe_ew") is not None:
-            gate_benches["universe_ew"] = pit_results["universe_ew"]
-            backtests["universe_ew"] = pit_results["universe_ew"].to_dict()
-            backtests["universe_ew"]["gate_status"] = "对照"
-        for name, srows in bundle.screens.items():
-            if pit_results and name in pit_results:
-                bt = pit_results[name]
-            else:
-                from zhiku.backtest.metrics import BacktestResult
-
-                bt = BacktestResult(
-                    screen=name,
-                    annualized=None,
-                    max_drawdown=None,
-                    sharpe=None,
-                    win_rate=None,
-                    turnover=None,
-                    notes=["无时点名单，禁止用今日静态 Top-N 回测（前视）"],
-                    passed_gate=False,
-                    insufficient_data=True,
-                    gate_status="数据不足",
-                    engine="pandas-pit",
-                )
-            attach_benchmarks(bt, gate_benches, sanity_max_ann_gap=settings.backtest.sanity_max_ann_gap)
-            finalize_gate(bt, settings.backtest)
-            if name in {"universe_ew", "csi300", "csi800"}:
-                bt.gate_status = "对照"
-            backtests[name] = bt.to_dict()
-            cov = bt.coverage_ratio
-            cov_txt = f"{cov:.0%}" if cov is not None else "缺数据"
-            if bt.insufficient_data or bt.gate_status == "数据不足":
-                insufficient.append(name)
-                notes.append(
-                    f"公式 {name} 覆盖 {cov_txt}（空仓 {bt.n_empty if bt.n_empty is not None else '?'} 月）"
-                    f"不足 {settings.backtest.min_coverage:.0%}，数据不足，公式分不计入总分。"
-                )
-            elif not bt.passed_gate:
-                gated.append(name)
-                notes.append(
-                    f"公式 {name} 回测未过闸（覆盖 {cov_txt}；对同池 T+1 等权超额须>0、"
-                    "Sharpe 不低于等权、前后半段超额都>0），公式分不计入总分，仅单票详情展示。"
-                )
-        for name in [*gated, *insufficient]:
-            active_screens.pop(name, None)
-    else:
-        if provider_kind == "live":
-            notes.append("缺本地日线，跳过回测闸门。请先 zk data sync。")
-        else:
-            notes.append("缺 monthly_prices.csv，跳过回测闸门。")
-
-    formula_all = formula_scores(
-        ScreenBundle(bundle.universe_size, bundle.quality_passed, bundle.quality, bundle.screens)
-    )
-    merge_formula = formula_scores(
-        ScreenBundle(bundle.universe_size, bundle.quality_passed, bundle.quality, active_screens)
-    )
-    if gated:
-        notes.append("未过闸公式分不计入总分，只在单票详情（screens_all）展示。")
-    if not merge_formula and qlib_scores:
-        notes.append("全部公式回测未过闸，总分仅用量化分。")
-    elif not merge_formula and not qlib_scores:
-        notes.append("全部公式回测未过闸且无量化分，候选为空。")
-    rank_ic, rank_src = load_forward_rank_ic(paths.models_dir)
-    merge_cfg, merge_info = scale_merge_settings(settings.merge, rank_ic, source=rank_src)
+        notes.append(f"只使用已发布公式验收 {gate_info.get('version')}（{gate_info.get('evaluated_asof')}）；daily 不重跑历史闸门。")
+    formula_all = formula_scores(bundle)
+    merge_formula = formula_scores(ScreenBundle(bundle.universe_size, bundle.quality_passed, bundle.quality, active_screens))
+    # Unversioned live_rank_ic.json is research evidence, not publication authority.
+    merge_cfg, merge_info = scale_merge_settings(settings.merge, None)
+    merge_cfg = merge_cfg.model_copy(update={"formula_first": True})
+    merge_info["formula_first"] = True
     result.merge_weights = merge_info
     notes.append(merge_info["note"])
-    if merge_info.get("oos_unverified"):
-        notes.append("量化样本外未验证")
-    if merge_cfg.formula_first and merge_formula:
-        notes.append("候选前 10 以过闸公式为主（目前仅过闸公式进池），量化分仅做排序辅助。")
-        if qlib_scores:
-            dropped = set(qlib_scores) - set(merge_formula)
-            if dropped:
-                notes.append(f"过闸公式优先：{len(dropped)} 只仅有量化分的标的不进候选。")
+    if mode == "live":
+        stale = set(merge_formula) - (set(live_prices) & fresh_spots)
+        merge_formula = {symbol: scores for symbol, scores in merge_formula.items() if symbol in live_prices and symbol in fresh_spots}
+        if stale:
+            notes.append(f"{len(stale)} 只标的缺 {settings.artifacts.price_max_age_days} 天内有效正数价格或新鲜估值截面，不进入正式候选。")
+    if mode == "live":
+        from zhiku.calendar import now_shanghai
+        if on != now_shanghai().date():
+            merge_formula = {}
+            notes.append("历史/未来 live 截面完整 PIT 来源尚未验证，仅输出研究观察，不生成正式候选。")
     merged = merge_scores(names, merge_formula, qlib_scores, merge_cfg)
+    observation_scores = merge_scores(names, formula_all, qlib_scores, merge_cfg.model_copy(update={"formula_first": False}))
+    result.observations = [{"symbol": c.symbol, "name": c.name, "formula_score": c.formula_score,
+        "qlib_score": c.qlib_score, "screens": c.screens, "source": c.source,
+        "eligible": c.symbol in merge_formula, "status": "research_only"} for c in observation_scores]
+
     result.screens = {
         name: [
             {"symbol": r.symbol, "name": r.name, "score": r.score, "breakdown": r.breakdown}
@@ -361,13 +209,6 @@ def run_daily(
     result.news = json.loads(news.to_json())
     notes.extend(macro.notes)
     notes.extend(news.notes)
-    trailing: dict = {}
-    if prices is not None and not getattr(prices, "empty", True) and len(prices) >= 252:
-        try:
-            mom = prices.iloc[-22] / prices.iloc[-252] - 1.0
-            trailing["universe_12_1"] = float(mom.mean(skipna=True))
-        except Exception:  # noqa: BLE001
-            trailing = {}
     from zhiku.ai.runner import run_ai_layer
 
     ai_result, pack_path, ai_notes = run_ai_layer(
@@ -378,7 +219,7 @@ def run_daily(
         rows=rows,
         news=result.news,
         macro=result.macro,
-        trailing=trailing or None,
+        trailing=None,
     )
     notes.extend(ai_notes)
     if pack_path is not None:
@@ -386,10 +227,14 @@ def run_daily(
     if ai_result is not None:
         result.ai_layer = ai_result.to_dict()
     result.notes = list(dict.fromkeys(notes))
+    # Snapshot identifies data/decisions, not transient filesystem paths or report rendering.
+    result.snapshot_id = fingerprint({"asof": result.asof, "mode": mode, "config": context,
+        "gate": gate_info, "model": qlib_meta, "candidates": result.candidates,
+        "observations": result.observations, "review_pack": Path(result.review_pack).name if result.review_pack else None})
     return result
 
 
-def write_daily_reports(paths: Paths, on: date, daily: DailyResult) -> list[Path]:
+def write_daily_reports(paths: Paths, on: date, daily: DailyResult, *, write_latest: bool = True, write_sources: bool = True) -> list[Path]:
     paths.ensure_runtime_dirs()
     md_path = write_report(paths.reports, on, "daily", render("daily.md.j2", daily=daily))
     folder = md_path.parent
@@ -398,22 +243,57 @@ def write_daily_reports(paths: Paths, on: date, daily: DailyResult) -> list[Path
     json_path = folder / f"{on.isoformat()}-zk-daily.json"
     payload = daily.to_json() + "\n"
     json_path.write_text(payload, encoding="utf-8")
+    snapshots = paths.reports / "daily-snapshots"
+    snapshots.mkdir(parents=True, exist_ok=True)
+    version = fingerprint(json.loads(payload))
+    snapshot = snapshots / f"{on.isoformat()}-{version}.json"
+    if not snapshot.exists():
+        snapshot.write_text(payload, encoding="utf-8")
     latest = paths.reports / "latest-daily.json"
-    latest.write_text(payload, encoding="utf-8")
-    written = [md_path, html_path, json_path, latest]
+    written = [md_path, html_path, json_path, snapshot]
+    if write_latest:
+        latest.write_text(payload, encoding="utf-8")
+        written.append(latest)
     brief_md = render("daily_brief.md.j2", daily=daily)
     lines = brief_md.splitlines()
     if len(lines) > 150:
         brief_md = "\n".join(lines[:150]) + "\n"
     brief_path = write_report(paths.reports, on, "brief", brief_md)
     latest_brief = paths.reports / "latest-brief.md"
-    latest_brief.write_text(brief_md, encoding="utf-8")
-    written.extend([brief_path, latest_brief])
+    written.append(brief_path)
+    if write_latest:
+        latest_brief.write_text(brief_md, encoding="utf-8")
+        written.append(latest_brief)
     from zhiku.macro.runner import MacroBundle, write_macro_reports
     from zhiku.news.runner import NewsBundle, write_news_reports
 
-    if daily.macro:
+    if write_sources and daily.macro:
         written.extend(write_macro_reports(paths, on, MacroBundle(**daily.macro)))
-    if daily.news:
+    if write_sources and daily.news:
         written.extend(write_news_reports(paths, on, NewsBundle(**daily.news)))
     return written
+
+
+def apply_review_to_daily(paths: Paths, result) -> bool:
+    """Render an ingested decision against its saved daily, without collecting again.
+
+    A newer daily may already exist. Never attach an old decision to that newer
+    evidence; it remains available in the journal and immutable review snapshot.
+    """
+    on = date.fromisoformat(result.asof)
+    dated = paths.reports / on.strftime("%Y-%m") / f"{on.isoformat()}-zk-daily.json"
+    if not dated.is_file():
+        return False
+    raw = json.loads(dated.read_text(encoding="utf-8"))
+    if raw.get("asof") != result.asof or Path(raw.get("review_pack") or "").stem != result.snapshot_id:
+        return False
+    daily = DailyResult(**raw)
+    daily.ai_layer = result.to_dict()
+    # Updating the exact dated report must not move latest backwards in time.
+    latest = paths.reports / "latest-daily.json"
+    update_latest = True
+    if latest.is_file():
+        current = json.loads(latest.read_text(encoding="utf-8"))
+        update_latest = current.get("asof", "") <= result.asof
+    write_daily_reports(paths, on, daily, write_latest=update_latest, write_sources=False)
+    return True

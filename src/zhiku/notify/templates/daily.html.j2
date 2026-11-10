@@ -43,7 +43,8 @@
   {% else %}
   <p class="note">无</p>
   {% endif %}
-  <h2>今日候选</h2>
+  <p>模式 {{ daily.source_mode or "unknown" }}；公式发布 {{ (daily.gate_artifact or {}).status or "unavailable" }} / {{ (daily.gate_artifact or {}).reason or "not_published" }}。</p>
+  <h2>正式候选</h2>
   <table>
     <tr><th>代码</th><th>名称</th><th>总分</th><th>公式分</th><th>qlib</th><th>来源</th></tr>
     {% for c in daily.candidates %}
@@ -56,7 +57,9 @@
     </tr>
     {% endfor %}
   </table>
-  <h2>回测</h2>
+  <h2>研究观察（不是正式候选）</h2>
+  <ul>{% for c in (daily.observations or [])[:20] %}<li>{{ c.symbol }} {{ c.name }}：仅研究，{{ "公式已准入" if c.eligible else "未准入" }}</li>{% endfor %}</ul>
+  <h2>已发布公式验收</h2>
   {% set pit = daily.pit_universe if daily.pit_universe is defined and daily.pit_universe else {} %}
   <p class="note">{{ pit.label or "未标时点池" }}。对照行是 T+1 开盘同池等权。覆盖&lt;80% 标数据不足。今日静态名单已作废（前视）。</p>
   <table>
@@ -97,7 +100,7 @@
   {% else %}
   <p class="note">无研判。</p>
   {% endif %}
-  <h2>AI 审核</h2>
+  <h2>确定性规则清单</h2>
   {% for a in daily.audits %}
     <h3>{{ a.symbol }} {{ a.name }} — {{ a.conclusion }}</h3>
     {% if a.skipped %}<p class="note">{{ a.skip_reason }}</p>{% endif %}

@@ -69,11 +69,12 @@ def test_merge_formula_first_drops_qlib_only() -> None:
     assert {c.symbol for c in open_pool} == {"000333", "600519"}
 
 
-def test_merge_falls_back_to_qlib_when_formula_empty() -> None:
+def test_merge_fails_closed_when_formula_empty() -> None:
     names = {"600519": "乙"}
     merged = merge_scores(names, {}, {"600519": 70.0}, MergeSettings(formula_first=True))
-    assert [c.symbol for c in merged] == ["600519"]
-    assert merged[0].source == "qlib"
+    assert merged == []
+    observations = merge_scores(names, {}, {"600519": 70.0}, MergeSettings(formula_first=False))
+    assert observations[0].source == "qlib"
 
 
 def test_load_forward_rank_ic_missing_is_locked_test(tmp_path) -> None:

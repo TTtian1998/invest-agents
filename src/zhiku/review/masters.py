@@ -119,12 +119,14 @@ def _from_checklist(card: MasterChecklist) -> MasterOpinion:
     )
 
 
-def audit_symbol(row: Fundamentals, masters: list[str]) -> AuditCard:
-    """先走规则清单（引用字段）。有 LLM key 时只追加一句，不覆盖清单。"""
+def audit_symbol(
+    row: Fundamentals, masters: list[str], *, llm_supplement: bool = False
+) -> AuditCard:
+    """规则清单默认纯确定性；历史大师补充仅显式请求时启用。"""
     cards, conflicts = run_checklists(row, masters)
     opinions = [_from_checklist(c) for c in cards]
     extra_note = None
-    key = llm_key()
+    key = llm_key() if llm_supplement else None
     if key:
         try:
             import openai  # noqa: F401
@@ -149,7 +151,7 @@ def audit_symbol(row: Fundamentals, masters: list[str]) -> AuditCard:
             if raw:
                 opinions[i].rationale = opinions[i].rationale + "｜补充：" + raw[:80]
     elif extra_note is None:
-        extra_note = "未配置 LLM，使用规则模板"
+        extra_note = "使用确定性规则清单；统一 AI 研判单独执行"
 
     conclusion = _vote(opinions)
     return AuditCard(

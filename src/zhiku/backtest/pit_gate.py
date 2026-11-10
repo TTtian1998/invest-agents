@@ -354,6 +354,7 @@ def attach_diagnostics(
 ) -> BacktestResult:
     extras = extras or {}
     result.fill = extras.get("fill")
+    result.close_fallback_fills = extras.get("close_fallback_fills")
     result.two_way_turnover = extras.get("two_way_turnover")
     result.one_way_cost_bps = extras.get("one_way_cost_bps")
     result.two_way_cost_bps = extras.get("two_way_cost_bps")
@@ -540,7 +541,7 @@ def evaluate_screens(
         amounts=amounts,
     )
     ew = universe_ew_picks(membership, dates, list(close.columns))
-    bench_nav, _, _ = rebalance_equal_weight(
+    bench_nav, _, bench_extras = rebalance_equal_weight(
         close, ew, opens=opens, cost_bps=0, slippage_bps=0, membership=membership, fill=settings.backtest.fill
     )
     results: dict[str, BacktestResult] = {}
@@ -587,7 +588,8 @@ def evaluate_screens(
     if not bench_nav.empty:
         ew_bt = summarize_nav(bench_nav, rf=settings.backtest.rf, periods_per_year=12.0, screen="universe_ew")
         ew_bt.notes = ["时点股票池等权，T+1 开盘、成本 0。对照行用此净值，不用月末收盘等权。"]
-        ew_bt.fill = settings.backtest.fill
+        ew_bt.engine = "pandas-pit"
+        attach_diagnostics(ew_bt, bench_nav, None, extras=bench_extras)
         ew_bt.gate_status = "对照"
         from zhiku.backtest.engine import attach_coverage
 
