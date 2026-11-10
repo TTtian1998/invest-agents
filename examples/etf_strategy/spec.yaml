@@ -1,0 +1,16 @@
+# Synthetic engineering demonstration, NOT a recommended or proven portfolio.
+strategy_id: synthetic_etf_momentum
+version: '1'
+source_mode: demo
+universe: [DEMO_A, DEMO_B, DEMO_C]
+universe_known_at: 2024-01-01
+lookback: 20
+top_n: 2
+rebalance_every: 20
+min_momentum: 0
+max_weight: 0.3
+max_gross: 0.8
+initial_cash: 100000
+cost_bps: 10
+slippage_bps: 5
+lot_size: 100
