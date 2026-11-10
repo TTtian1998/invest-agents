@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -29,6 +28,11 @@ def _emergency_panel(news: dict | None) -> None:
     """应急模式始终可见：未触发也写明状态，避免产品页空白。"""
     st.subheader("应急模式")
     em = (news or {}).get("emergency") or {}
+    if not news or em.get("active") is None:
+        st.warning("应急状态未知：没有可用检测结果，不能据此判断当前风险正常。")
+        return
+    if news.get("asof") != now_shanghai().date().isoformat():
+        st.warning("历史快照：以下应急状态不代表当前市场。")
     if em.get("active"):
         st.error("应急模式已开启：" + "；".join(em.get("reasons") or []))
         st.write("应对清单：")
@@ -47,7 +51,7 @@ def _emergency_panel(news: dict | None) -> None:
         if em.get("freeze_adds"):
             st.warning("触发线与新开仓：禁加")
     else:
-        st.info("当前未进入应急模式（VIX / 指数盘中跌幅 / 多源冲突关键词均未超阈值）。")
+        st.info("该快照未记录应急触发；这不是当前零风险声明。")
         playbook = em.get("playbook") or [
             "先降风险，不扩大暴露",
             "不抄底",
@@ -85,23 +89,17 @@ def _crowding_panel(news: dict | None) -> None:
         st.info("缺数据：还没有按拥挤度分组的事件研究样本。")
 
 
-def _examples_kb() -> Path | None:
-    here = Path(__file__).resolve()
-    cand = here.parents[3] / "examples" / "kb"
-    if cand.is_dir():
-        return cand
-    return None
-
-
 def main() -> None:
     st.set_page_config(page_title="zhiku 看板", layout="wide")
-    st.title("zhiku 投研看板")
+    st.title("zhiku 旧版兼容看板")
+    st.info("新版只读研究工作台：使用 zk ui 启动；当前为 zk ui --legacy 兼容入口。")
     st.caption(
         "研究与提醒工具，不构成投资建议。页面中的持仓、价位、财务均为虚构示例或来自仓库外 ZHIKU_KB。"
     )
 
     paths = Paths.load()
     daily = _load_daily(paths)
+    demo_mode = bool(daily and daily.get("source_mode") == "demo" and daily.get("fictional") is True)
     news = None
     news_path = latest_json(paths.reports, "news")
     if news_path is not None:
@@ -368,15 +366,10 @@ def main() -> None:
                 st.caption("标的拥挤备注（虚构样本）：" + "；".join(dict.fromkeys(notes)))
 
     with tabs[8]:
-        st.write("读取 `ZHIKU_KB` 下的规则与持仓；若不存在则回退到仓库内虚构示例。")
+        st.write("只读取当前 ZHIKU_KB 的规则；缺少规则不回退到其他知识库。")
         rule_paths = paths
         source = "ZHIKU_KB"
-        if not paths.rules.is_dir() or not any(paths.rules.glob("*.yaml")):
-            example = _examples_kb()
-            if example is not None:
-                rule_paths = Paths.load(kb=example, fixtures=example.parent / "fixtures")
-                source = "examples（虚构）"
-        st.caption(f"当前规则来源：{source}（示例知识库，非真实账户）")
+        st.caption(f"当前规则来源：{source}；仅展示规则，不确认实时行情。")
         try:
             books = load_symbol_books(rule_paths.rules)
             _frame(
@@ -395,7 +388,9 @@ def main() -> None:
             )
         except (RulesSchemaError, FileNotFoundError) as exc:
             st.error(str(exc))
-        if rule_paths.positions.is_file():
+        if not demo_mode:
+            st.info("实时暴露状态未知：旧版页面不会使用演示价格估算真实持仓。请查看显式生成的风控报告。")
+        if demo_mode and rule_paths.positions.is_file():
             try:
                 portfolio = load_portfolio(rule_paths.positions)
                 provider = (
@@ -420,14 +415,9 @@ def main() -> None:
     with tabs[9]:
         events = EventLog(paths.events).read() if paths.events.is_file() else []
         if not events:
-            example = _examples_kb()
-            if example is not None:
-                alt = Paths.load(kb=example, fixtures=example.parent / "fixtures")
-                if alt.events.is_file():
-                    events = EventLog(alt.events).read()
-                    paths = alt
-        if not events:
             st.info("还没有触发事件。可先跑 `zk --provider fixture close --date 2026-10-20`。")
+        elif not demo_mode:
+            st.info("此页面不使用演示行情回测真实事件。请通过显式 review 命令生成对应来源的复盘报告。")
         else:
             end = now_shanghai().date()
             if daily and daily.get("asof"):

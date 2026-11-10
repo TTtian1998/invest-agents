@@ -26,11 +26,12 @@ stats = ["quantstats>=0.0.86"]
 debate = ["tradingagents @ git+https://github.com/TauricResearch/TradingAgents@v0.7.0"]
 qlib = ["pyqlib>=0.9", "lightgbm>=4"]
 backtest = ["vectorbt>=0.27"]
-ui = ["streamlit>=1.38"]
+ui = ["fastapi>=0.115", "uvicorn>=0.30"]
+legacy-ui = ["streamlit>=1.38"]
 masters = ["openai>=1.40"]
 cursor = ["cursor-sdk"]
-dev = ["pytest>=8", "pytest-cov", "ruff", "mypy", "scipy"]
-full = ["streamlit>=1.38", "vectorbt>=0.27", "quantstats>=0.0.86", "openai>=1.40"]
+dev = ["pytest>=8", "pytest-cov", "ruff", "mypy", "scipy", "httpx>=0.27"]
+full = ["fastapi>=0.115", "uvicorn>=0.30", "streamlit>=1.38", "vectorbt>=0.27", "quantstats>=0.0.86", "openai>=1.40"]
 
 [project.scripts]
 zk = "zhiku.cli:app"
@@ -38,14 +39,12 @@ zk = "zhiku.cli:app"
 [tool.hatch.metadata]
 allow-direct-references = true
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/zhiku"]
+
+# In-package static/templates/YAML are included once by packages above.
 [tool.hatch.build.targets.wheel.force-include]
-"src/zhiku/notify/templates" = "zhiku/notify/templates"
-"src/zhiku/pipeline/default.yaml" = "zhiku/pipeline/default.yaml"
-"src/zhiku/macro/chains.yaml" = "zhiku/macro/chains.yaml"
-"src/zhiku/news/grades.yaml" = "zhiku/news/grades.yaml"
 "config/x_accounts.example.yaml" = "zhiku/news/x_accounts.example.yaml"
-"src/zhiku/events/supply_chains.yaml" = "zhiku/events/supply_chains.yaml"
-"src/zhiku/events/playbook.yaml" = "zhiku/events/playbook.yaml"
 
 [tool.pytest.ini_options]
 addopts = "-m \"not network\""
