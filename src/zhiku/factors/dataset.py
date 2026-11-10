@@ -143,7 +143,7 @@ def neutralize(
     if values.empty:
         return values
     frame = values.rename("y").to_frame()
-    frame["industry"] = (industry.reindex(values.index) if industry is not None else "未知").fillna("未知")
+    frame["industry"] = industry.reindex(values.index).fillna("未知") if industry is not None else "未知"
     frame["size"] = size.reindex(values.index) if size is not None else np.nan
     parts = []
     for _, g in frame.groupby(level="date"):
@@ -472,6 +472,8 @@ def load_revision_features(store: MarketStore, symbols: list[str], calendar: Ite
                 val = payload.get("profit_forecast")
                 if val is None:
                     val = payload.get("increment")
+                if val is None:
+                    continue
                 try:
                     fval = float(val)
                 except (TypeError, ValueError):

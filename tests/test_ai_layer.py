@@ -12,7 +12,7 @@ from zhiku.ai.backend import MockBackend, resolve_backend
 from zhiku.ai.extract import extract_text_factor, factor_value
 from zhiku.ai.journal import DecisionJournal
 from zhiku.ai.judge import judge_symbol
-from zhiku.ai.pack import RESULT_SCHEMA, build_review_pack, load_review_result, write_review_pack
+from zhiku.ai.pack import RESULT_SCHEMA, build_review_pack, load_review_result, result_from_parts, write_review_pack
 from zhiku.ai.regime import advise_regime
 from zhiku.ai.schema import CitedClaim, Judgment, ReviewResult
 from zhiku.ai.scorecard import build_scorecard
@@ -122,6 +122,27 @@ def test_regime_mock() -> None:
     advice = advise_regime(MockBackend(), trailing={"universe_12_1": 0.12})
     assert advice.prefer_screens
     assert advice.cite
+
+
+def test_pack_skips_missing_symbols_without_changing_ranks() -> None:
+    pack = build_review_pack(
+        asof=date(2026, 10, 21),
+        candidates=[{}, {"symbol": None}, {"symbol": "000333"}],
+        rows=[_row(symbol="000333")],
+        masters=["graham"],
+    )
+    assert len(pack["candidates"]) == 1
+    assert pack["candidates"][0]["rank"] == 3
+    assert pack["candidates"][0]["candidate"]["symbol"] == "000333"
+
+
+def test_result_from_parts_preserves_schema_alias() -> None:
+    result = result_from_parts(
+        asof="2026-10-21", backend="mock", extractions=[], judgments=[], regime=None
+    )
+    assert result.schema_name == RESULT_SCHEMA
+    assert result.to_dict()["schema"] == RESULT_SCHEMA
+    assert "schema_name" not in result.to_dict()
 
 
 def test_scorecard_follow_vs_avoid(tmp_path: Path) -> None:

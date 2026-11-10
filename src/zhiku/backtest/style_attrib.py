@@ -114,7 +114,7 @@ def industry_excess_table(
             acc.setdefault(ind, []).append(r_s - r_b if in_h else np.nan)
             alloc_acc.setdefault(ind, []).append(alloc)
             sel_acc.setdefault(ind, []).append(sel)
-    rows = []
+    rows: list[dict[str, Any]] = []
     for ind in sorted(acc):
         xs = [x for x in acc[ind] if pd.notna(x)]
         rows.append(

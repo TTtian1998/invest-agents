@@ -6,6 +6,7 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from zhiku.data.store import MarketStore
 from zhiku.factors.dataset import (
@@ -113,6 +114,25 @@ def test_neutralize_industry_mean_zero() -> None:
     # X: 2,4 mean 3 → -1, +1; Y: 10,12 mean 11 → -1,+1
     assert abs(float(out.iloc[0]) + 1.0) < 1e-9
     assert abs(float(out.iloc[1]) - 1.0) < 1e-9
+
+
+@pytest.mark.parametrize("industry_case", ["missing", "all_null", "partial"])
+def test_neutralize_missing_industry_is_unknown_per_date(industry_case: str) -> None:
+    idx = pd.MultiIndex.from_product(
+        [pd.to_datetime(["2025-01-31", "2025-02-28"]), ["A", "B", "C", "D"]],
+        names=["date", "symbol"],
+    )
+    values = pd.Series([2.0, 4.0, 10.0, 12.0, 20.0, 40.0, 100.0, 120.0], index=idx, name="label")
+    industry = None
+    expected = [-5.0, -3.0, 3.0, 5.0, -50.0, -30.0, 30.0, 50.0]
+    if industry_case == "all_null":
+        industry = pd.Series(None, index=idx, dtype=object)
+    elif industry_case == "partial":
+        # A/B have a known industry; C/D are missing and must form one unknown group.
+        industry = pd.Series("X", index=idx[[0, 1, 4, 5]])
+        expected = [-1.0, 1.0, -1.0, 1.0, -10.0, 10.0, -10.0, 10.0]
+    out = neutralize(values, industry=industry)
+    pd.testing.assert_series_equal(out, pd.Series(expected, index=idx, name="label"))
 
 
 def test_split_is_frozen_and_ordered() -> None:

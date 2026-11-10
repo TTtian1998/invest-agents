@@ -492,13 +492,12 @@ def train_panel_recipe(
         }
     try:
         raw = json.loads(recipe_path.read_text(encoding="utf-8"))
-        cfg = ExperimentConfig(
-            **{
-                k: tuple(raw[k]) if k == "features" and isinstance(raw[k], list) else raw[k]
-                for k in ExperimentConfig.__dataclass_fields__
-                if k in raw
-            }
-        )
+        params: dict[str, Any] = {
+            k: tuple(raw[k]) if k == "features" and isinstance(raw[k], list) else raw[k]
+            for k in ExperimentConfig.__dataclass_fields__
+            if k in raw
+        }
+        cfg = ExperimentConfig(**params)
     except (OSError, TypeError, json.JSONDecodeError, KeyError) as exc:
         return {"status": "skipped", "notes": [f"locked_recipe.json 无法读取：{exc}"]}
     res, pred, model = run_one(store, cfg, asof=asof, report_splits=("valid",))
