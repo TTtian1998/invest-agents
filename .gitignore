@@ -37,3 +37,6 @@ htmlcov/
 .DS_Store
 .idea/
 .vscode/
+
+# Browser QA output (fictional fixtures only)
+browser-artifacts/
